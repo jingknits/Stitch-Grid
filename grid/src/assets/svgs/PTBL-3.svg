@@ -1,13 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <path d="
-      M 20,80
-      C 80,80
-        90,20
-        50,20
-      M 80,80
-      C 20,80
-        10,20
-        50,20
+      M 20,85
+      C 80,85
+        90,30
+        50,30
+      M 80,85
+      C 20,85
+        10,30
+        50,30
     " fill="none" stroke="black" stroke-width="10px" stroke-linecap="round" />
-  <path d="M20 5 L 80 5  " stroke="black" stroke-width="5" stroke-linecap="round" fill="none" />
+  <path d="M20 15 L 80 15  " stroke="black" stroke-width="10" stroke-linecap="round" fill="none" />
 </svg>

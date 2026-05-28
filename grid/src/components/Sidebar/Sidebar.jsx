@@ -42,7 +42,7 @@ export default function Sidebar({
   setSelected,
   moveMode,
 }) {
-  const [sidebarWidth, setSidebarWidth] = useState(220);
+  const [sidebarWidth, setSidebarWidth] = useState(300);
 
   const handleResizeStart = (e) => {
     e.preventDefault();
@@ -73,8 +73,10 @@ export default function Sidebar({
         boxShadow: "4px 0 20px rgba(0,0,0,0.5)",
         overflow: "hidden",
         position: "relative",
+        paddingTop: 50,
       }}
     >
+
       {/* Resize handle */}
       <div
         onMouseDown={handleResizeStart}
@@ -86,20 +88,12 @@ export default function Sidebar({
         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
       />
 
-      {/* Header */}
-      <div style={{ padding: "14px 12px 8px", borderBottom: "1px solid #0f3460", flexShrink: 0 }}>
-        <div style={{ color: "#e94560", fontSize: 11, letterSpacing: 3, fontWeight: 700, textTransform: "uppercase" }}>
-          Gridmark
-        </div>
-        <div style={{ color: "#4a4a8a", fontSize: 9, marginTop: 2 }}>SVG Symbol Grid</div>
-      </div>
-
       {/* Symbols header with DIR / EDIT buttons */}
       <div
         style={{
-          padding: "8px 12px 4px",
+          padding: "8px 12px 10px",
           color: "#7070b0",
-          fontSize: 10,
+          fontSize: 16,
           letterSpacing: 2,
           textTransform: "uppercase",
           display: "flex",
@@ -121,7 +115,7 @@ export default function Sidebar({
               borderRadius: 4,
               color: showDirectory ? "#fff" : "#60a0d0",
               cursor: "pointer",
-              fontSize: 9,
+              fontSize: 14,
               fontWeight: 700,
               padding: "2px 6px",
             }}
@@ -140,7 +134,7 @@ export default function Sidebar({
               borderRadius: 4,
               color: showEditSymbols ? "#fff" : "#60a0d0",
               cursor: "pointer",
-              fontSize: 9,
+              fontSize: 14,
               fontWeight: 700,
               padding: "2px 6px",
             }}
@@ -183,11 +177,11 @@ export default function Sidebar({
         {symbols.length === 0 && !showDirectory && !showEditSymbols && (
           <div style={{ padding: "20px 8px", textAlign: "center" }}>
             <div style={{ color: "#3a4a6a", fontSize: 22, marginBottom: 8 }}>⬙</div>
-            <div style={{ color: "#4a5a7a", fontSize: 10, lineHeight: 1.6 }}>
+            <div style={{ color: "#4a5a7a", fontSize: 16, lineHeight: 1.6 }}>
               No symbols loaded
             </div>
-            <div style={{ color: "#3a4a6a", fontSize: 9, marginTop: 4, lineHeight: 1.5 }}>
-              Open the <span style={{ color: "#5080e0", fontWeight: 700, cursor: "pointer" }} onClick={() => { setShowDirectory(true); if (showEditSymbols) setShowEditSymbols(false); }}>DIR</span> to upload SVGs, or use <span style={{ color: "#e94560", fontWeight: 700, cursor: "pointer" }} onClick={() => { setShowEditSymbols(true); if (showDirectory) setShowDirectory(false); }}>EDIT</span> to add one directly
+            <div style={{ color: "#3a4a6a", fontSize: 16, marginTop: 4, lineHeight: 1.5 }}>
+              Open the <span style={{ color: "#5080e0", fontWeight: 700, cursor: "pointer" }} onClick={() => { setShowDirectory(true); if (showEditSymbols) setShowEditSymbols(false); }}>DIR</span> for stock svgs, or use <span style={{ color: "#e94560", fontWeight: 700, cursor: "pointer" }} onClick={() => { setShowEditSymbols(true); if (showDirectory) setShowDirectory(false); }}>EDIT</span> to add one directly
             </div>
           </div>
         )}
@@ -217,13 +211,13 @@ export default function Sidebar({
           padding: "6px 12px 8px",
           borderTop: "1px solid #0f3460",
           color: "#4a4a7a",
-          fontSize: 9,
+          fontSize: 12,
           lineHeight: 1.7,
           flexShrink: 0,
         }}
       >
-        <div>Scroll: zoom · Space+Drag: pan</div>
-        <div>Click: select · Ctrl+Click: multi</div>
+        <div>Scroll: zoom | Space+Drag: pan</div>
+        <div>Click: select | Ctrl+Click: multi</div>
       </div>
     </div>
   );

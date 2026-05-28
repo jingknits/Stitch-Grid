@@ -147,6 +147,7 @@ export default function App() {
         guideLines={state.guideLines} clearGuideLines={state.clearGuideLines} removeLastGuideLine={state.removeLastGuideLine}
         knittingMode={knittingMode} toggleKnittingMode={toggleKnittingMode}
         fileName={state.fileName} setFileName={state.setFileName}
+        resizeGrid={state.resizeGrid}
       />
       {state.showConfirm && <ResetModal onCancel={() => state.setShowConfirm(false)} onReset={state.resetGrid} />}
     </div>

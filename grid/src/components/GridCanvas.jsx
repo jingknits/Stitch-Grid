@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
 import { cellKey, parseKey, resolveRoot } from "../utils/cellUtils";
 import { svgToDataUrl } from "../utils/svgUtils";
 
@@ -25,13 +25,11 @@ export default function GridCanvas({
   bgImageStartDrag,
   gridRows,
   gridCols,
-  guideLineMode,
-  guideLines,
-  guideLinePreview,
   knittingMode,
   slashedRows,
   onNextRow,
   onPrevRow,
+  onKnittingCellClick = null,
 }) {
   const { r0, r1, c0, c1 } = getViewport();
 
@@ -39,6 +37,84 @@ export default function GridCanvas({
   const symMap = useRef(new Map());
   symMap.current.clear();
   for (const s of symbols) symMap.current.set(s.id, s);
+
+  // Knitting cell click state.
+  // knittingPartial: { r, c } | null
+  //   r = internal row index of the frontier (the row currently being worked on)
+  //   c = column of the last cell click (drives the partial-slash visual on the frontier row)
+  //       c === 0 means the full row is shown slashed (set by Next/Prev navigation)
+  // All rows with internal index > knittingPartial.r are fully slashed.
+  // When null, nav defers to App's slashedRows / onNextRow / onPrevRow.
+  const [knittingPartial, setKnittingPartial] = useState(null);
+
+  // Effective slashed: all internal rows strictly below the frontier (index > frontier.r)
+  // plus whatever App has already committed in slashedRows.
+  const effectiveSlashed = new Set(slashedRows);
+  if (knittingPartial !== null) {
+    for (let pr = knittingPartial.r + 1; pr < gridRows; pr++) effectiveSlashed.add(pr);
+  }
+
+  // completedCount = number of rows strictly below the frontier (perimeter rows 1..frontier-1)
+  // = gridRows - knittingPartial.r - 1
+  // When no partial is active, fall back to App's count.
+  const completedCount = knittingPartial !== null
+    ? gridRows - knittingPartial.r - 1
+    : slashedRows.size;
+
+  const handleKnittingClick = useCallback((e) => {
+    if (!knittingMode) return false;
+    if (e.button !== 0) return false;
+    if (spaceDown.current) return false;
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return false;
+    const r = Math.floor((e.clientY - rect.top - offset.y) / cs);
+    const c = Math.floor((e.clientX - rect.left - offset.x) / cs);
+    if (r < 0 || r >= gridRows || c < 0 || c >= gridCols) return false;
+    setKnittingPartial({ r, c });
+    if (onKnittingCellClick) onKnittingCellClick(r, c);
+    return true;
+  }, [knittingMode, offset, cs, gridRows, gridCols, onKnittingCellClick]);
+
+  // Next Row: fully slash the frontier row and advance the frontier up one row (r - 1).
+  // The frontier row goes from partial-slash to full-slash, and banner count goes up by 1.
+  const handleNextRow = useCallback(() => {
+    if (knittingPartial !== null) {
+      const { r, c } = knittingPartial;
+      if (c > 0) {
+        setKnittingPartial({ r: r, c: 0 });
+      }
+      else if (r > 0) {
+        setKnittingPartial({ r: r - 1, c: 0 });
+      } else {
+        // Already at the topmost row -- slash it and clear
+        setKnittingPartial(null);
+        onNextRow();
+      }
+    } else {
+      onNextRow();
+    }
+  }, [knittingPartial, onNextRow]);
+
+  // Prev Row:
+  // - If a partial click is active (c > 0): first press clears the column (c -> 0),
+  //   keeping the frontier row the same so the banner count is unchanged.
+  // - If frontier is already at c === 0: move frontier down one row (r + 1), unslashing it.
+  const handlePrevRow = useCallback(() => {
+    if (knittingPartial !== null) {
+      const { r, c } = knittingPartial;
+      if (c > 0) {
+        // Clear partial column -- frontier stays on same row, banner count unchanged
+        setKnittingPartial({ r: r + 1, c: 0 });
+      } else if (r + 1 < gridRows) {
+        setKnittingPartial({ r: r + 1, c: 0 });
+      } else {
+        // Frontier was at the very bottom row -- clear entirely
+        setKnittingPartial(null);
+      }
+    } else {
+      onPrevRow();
+    }
+  }, [knittingPartial, gridRows, onPrevRow]);
 
   // Drag highlight rect
   let dragHighlight = null;
@@ -64,8 +140,8 @@ export default function GridCanvas({
   const occupiedCells = [];
   const rootCells = [];
   const selectedCells = [];
-  let occupiedPathD = "";
   let emptyPathD = "";
+
 
   for (let r = r0; r <= r1; r++) {
     for (let c = c0; c <= c1; c++) {
@@ -75,7 +151,6 @@ export default function GridCanvas({
       const y = r * cs;
 
       if (cell) {
-        occupiedPathD += `M${x},${y}h${cs}M${x},${y}v${cs}`;
         occupiedCells.push({ r, c, key, cell, x, y });
         if (cell.spanWidth >= 1) {
           rootCells.push({ r, c, key, cell, x, y });
@@ -90,7 +165,19 @@ export default function GridCanvas({
       }
     }
   }
-
+  // Build occupiedPathD and occupiedMaskD from root cells only —
+  // only interior vertical lines of multi-cell symbols
+  let occupiedPathD = "";
+  let occupiedMaskD = "";
+  for (const { cell, x, y } of rootCells) {
+    if (cell.spanWidth <= 1) continue; // width-1 symbols have no interior verticals
+    // Interior vertical lines: from the 2nd to the (spanWidth-1)th cell boundary
+    for (let i = 1; i < cell.spanWidth; i++) {
+      const lx = x + i * cs;
+      occupiedPathD += `M${lx},${y}v${cs}`;
+      occupiedMaskD += `M${lx - 1},${y}h2v${cs}h-2Z`;
+    }
+  }
   const { dr: mdr, dc: mdc } = moveOffset;
   const selectedRootsForMove = new Set();
   if (moveMode)
@@ -109,6 +196,31 @@ export default function GridCanvas({
     return () => el.removeEventListener("wheel", onWheel);
   }, [onWheel, containerRef]);
 
+  // Clear local knitting state when mode is toggled off
+  useEffect(() => {
+    if (!knittingMode) {
+      setKnittingPartial(null);
+    }
+  }, [knittingMode]);
+
+  // Knitting mode keyboard shortcuts
+  useEffect(() => {
+    const handler = (e) => {
+      if (!knittingMode) return;
+      const tag = e.target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "Enter" || e.key === "ArrowUp") {
+        e.preventDefault();
+        handleNextRow();
+      } else if (e.key === "Delete" || e.key === "Backspace" || e.key === "ArrowDown") {
+        e.preventDefault();
+        handlePrevRow();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [knittingMode, handleNextRow, handlePrevRow]);
+
   return (
     <div
       ref={containerRef}
@@ -116,14 +228,14 @@ export default function GridCanvas({
         flex: 1,
         position: "relative",
         overflow: "hidden",
-        cursor: knittingMode ? (spaceDown.current ? "grab" : "default") : bgImageEditing ? "grab" : guideLineMode ? "crosshair" : moveMode ? "grab" : spaceDown.current ? "grab" : "crosshair",
+        cursor: knittingMode ? (spaceDown.current ? "grab" : "crosshair") : bgImageEditing ? "grab" : moveMode ? "grab" : spaceDown.current ? "grab" : "crosshair",
       }}
-      onMouseDown={onMouseDown}
+      onMouseDown={(e) => { if (!handleKnittingClick(e)) onMouseDown(e); }}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {/* Grid lines — bottom layer, clipped to grid bounds */}
+      {/* Grid lines — bottom layer, clipped to grid bounds, masked to hide under symbols */}
       <svg
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 1 }}
       >
@@ -131,11 +243,18 @@ export default function GridCanvas({
           <pattern id="smallGrid" width={cs} height={cs} patternUnits="userSpaceOnUse" x={offset.x} y={offset.y}>
             <path d={`M ${cs} 0 L 0 0 0 ${cs}`} fill="none" stroke="#1e2a4a" strokeWidth="0.5" />
           </pattern>
+          {occupiedMaskD && (
+            <mask id="gridMask">
+              <rect x={offset.x} y={offset.y} width={gridCols * cs} height={gridRows * cs} fill="white" />
+              <path d={occupiedMaskD} fill="black" transform={`translate(${offset.x},${offset.y})`} />
+            </mask>
+          )}
         </defs>
         <rect
           x={offset.x} y={offset.y}
           width={gridCols * cs} height={gridRows * cs}
           fill="url(#smallGrid)"
+          mask={occupiedMaskD ? "url(#gridMask)" : undefined}
         />
       </svg>
 
@@ -216,10 +335,10 @@ export default function GridCanvas({
                 key={`bg-${key}`}
                 style={{
                   position: "absolute",
-                  left: x + 0.5,
-                  top: y + 0.5,
-                  width: cs - 1,
-                  height: cs - 1,
+                  left: x,
+                  top: y,
+                  width: cs,
+                  height: cs,
                   background: "#ffffff",
                   boxSizing: "border-box",
                   opacity: isSelRoot ? 0.2 : 1,
@@ -232,7 +351,7 @@ export default function GridCanvas({
         {/* Grid lines overlay */}
         <svg style={{ position: "absolute", left: 0, top: 0, width: gridCols * cs, height: gridRows * cs, pointerEvents: "none", zIndex: 3, overflow: "visible" }}>
           {emptyPathD && <path d={emptyPathD} fill="none" stroke="#1e2a4a" strokeWidth="0.5" />}
-          {occupiedPathD && <path d={occupiedPathD} fill="none" stroke="#c0c0c0" strokeWidth="0.5" />}
+          {occupiedPathD && <path d={occupiedPathD} fill="none" stroke="#7ba5ff73" strokeWidth="0.5" />}
         </svg>
 
         {/* Symbol images */}
@@ -328,65 +447,50 @@ export default function GridCanvas({
           />
         )}
 
-        {/* Guide lines */}
-        {(guideLines.length > 0 || guideLinePreview) && (
-          <svg style={{ position: "absolute", left: 0, top: 0, width: gridCols * cs, height: gridRows * cs, pointerEvents: "none", zIndex: 30, overflow: "visible" }}>
-            {guideLines.map((gl, i) => (
-              <line
-                key={`guide-${i}`}
-                x1={gl.c1 * cs} y1={gl.r1 * cs}
-                x2={gl.c2 * cs} y2={gl.r2 * cs}
-                stroke="#f0c060"
-                strokeWidth={5}
-                strokeLinecap="round"
-              />
-            ))}
-            {guideLinePreview && (
-              <line
-                x1={guideLinePreview.c1 * cs} y1={guideLinePreview.r1 * cs}
-                x2={guideLinePreview.c2 * cs} y2={guideLinePreview.r2 * cs}
-                stroke="#f0c060"
-                strokeWidth={5}
-                strokeLinecap="round"
-                strokeDasharray="4 3"
-                opacity={0.8}
-              />
-            )}
-          </svg>
-        )}
-
         {/* Knitting mode overlays */}
         {knittingMode && (
           <div style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none", zIndex: 10 }}>
             {Array.from({ length: gridRows }, (_, r) => {
               const perimNum = gridRows - r;
               const isEven = perimNum % 2 === 0;
-              const isSlashed = slashedRows.has(r);
-              if (!isEven && !isSlashed) return null;
+              const isSlashed = effectiveSlashed.has(r);
+              const isPartialRow = knittingPartial !== null && r === knittingPartial.r;
+              if (!isEven && !isSlashed && !isPartialRow) return null;
               return (
                 <div
                   key={`knit-row-${r}`}
                   style={{
                     position: "absolute",
-                    left: 0, top: r * cs,
-                    width: gridCols * cs, height: cs,
-                    background: isSlashed ? "rgba(10, 10, 20, 0.7)" : isEven ? "rgba(10, 10, 30, 0.3)" : "none",
+                    left: isPartialRow && !isSlashed ? knittingPartial.c * cs : 0,
+                    top: r * cs,
+                    width: isPartialRow && !isSlashed ? (gridCols - knittingPartial.c) * cs : gridCols * cs,
+                    height: cs,
+                    background: (isPartialRow || isSlashed) ? "rgba(255, 0, 0, 0.1)" : "rgba(10, 10, 20, 0.4)",
                   }}
                 />
               );
+
             })}
             <svg style={{ position: "absolute", left: 0, top: 0, width: gridCols * cs, height: gridRows * cs, overflow: "visible" }}>
-              {Array.from(slashedRows).map((r) => (
+              {Array.from(effectiveSlashed).map((r) => (
                 <line
                   key={`slash-${r}`}
                   x1={0} y1={r * cs + cs / 2}
                   x2={gridCols * cs} y2={r * cs + cs / 2}
                   stroke="#e94560"
-                  strokeWidth={2}
-                  strokeDasharray="8 4"
+                  strokeWidth={3}
                   opacity={0.8}
                 />
               ))}
+              {knittingPartial !== null && !effectiveSlashed.has(knittingPartial.r) && (
+                <line
+                  x1={knittingPartial.c * cs} y1={knittingPartial.r * cs + cs / 2}
+                  x2={gridCols * cs} y2={knittingPartial.r * cs + cs / 2}
+                  stroke="#e94560"
+                  strokeWidth={3}
+                  opacity={0.8}
+                />
+              )}
             </svg>
           </div>
         )}
@@ -531,10 +635,10 @@ export default function GridCanvas({
             zIndex: 30,
           }}
         >
-          <div style={{ color: moveMode ? "#40d040" : "#ffd700", fontSize: 12, fontWeight: 700, marginBottom: 4 }}>
+          <div style={{ color: moveMode ? "#40d040" : "#ffd700", fontSize: 16, fontWeight: 700, marginBottom: 4 }}>
             {moveMode ? "Move Mode" : "Selection"}
           </div>
-          <div style={{ color: "#e0e0ff", fontSize: 11, lineHeight: 1.7 }}>
+          <div style={{ color: "#e0e0ff", fontSize: 12, lineHeight: 1.7 }}>
             <span style={{ color: "#7070b0" }}>Rows: </span>
             {selectionInfo.rows}
             {"  "}
@@ -542,12 +646,12 @@ export default function GridCanvas({
             {selectionInfo.cols}
           </div>
           {moveMode && (mdr !== 0 || mdc !== 0) && (
-            <div style={{ color: "#40d040", fontSize: 10, marginTop: 2 }}>
+            <div style={{ color: "#40d040", fontSize: 12, marginTop: 2 }}>
               Δr={mdr} Δc={mdc}
             </div>
           )}
           {!moveMode && (
-            <div style={{ color: "#6060a0", fontSize: 11, marginTop: 2 }}>
+            <div style={{ color: "#6060a0", fontSize: 12, marginTop: 2 }}>
               [{selectionInfo.endR},{selectionInfo.endC}] → [{selectionInfo.startR},{selectionInfo.startC}]
             </div>
           )}
@@ -579,7 +683,7 @@ export default function GridCanvas({
             zIndex: 30, whiteSpace: "nowrap",
           }}
         >
-          🧶 KNITTING MODE — {slashedRows.size} / {gridRows} rows completed
+          🧶 KNITTING MODE — {completedCount} / {gridRows} rows completed
         </div>
       )}
 
@@ -592,12 +696,13 @@ export default function GridCanvas({
           }}
         >
           {[
-            { label: "← Previous Row", onClick: onPrevRow, color: "#f0a030", hoverBg: "#2a2a1a", borderColor: "#f0a030" },
-            { label: "Next Row →", onClick: onNextRow, color: "#60d090", hoverBg: "#1a3a2a", borderColor: "#60d090" },
+            { label: "← Previous Row", onClick: handlePrevRow, color: "#f0a030", hoverBg: "#2a2a1a", borderColor: "#f0a030" },
+            { label: "Next Row →", onClick: handleNextRow, color: "#60d090", hoverBg: "#1a3a2a", borderColor: "#60d090" },
           ].map(({ label, onClick, color, hoverBg, borderColor }) => (
             <button
               key={label}
               onClick={onClick}
+              onMouseDown={(e) => e.stopPropagation()}
               style={{
                 padding: "10px 24px", borderRadius: 8,
                 border: `2px solid ${borderColor}`,

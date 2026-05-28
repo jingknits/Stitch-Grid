@@ -38,6 +38,8 @@ export default function useGridState() {
 
   // ── Selection ─────────────────────────────────────────────────────────────
   const [selected, setSelected] = useState(new Set());
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
   const isDragging = useRef(false);
   const dragStart = useRef(null);
   const dragCurrent = useRef(null);
@@ -59,6 +61,8 @@ export default function useGridState() {
 
   // ── Move mode ─────────────────────────────────────────────────────────────
   const [moveMode, setMoveMode] = useState(false);
+  const moveModeRef = useRef(false);
+  moveModeRef.current = moveMode;
   const [moveOffset, setMoveOffset] = useState({ dr: 0, dc: 0 });
   const isMoveDragging = useRef(false);
   const moveDragStartCell = useRef(null);
@@ -68,12 +72,6 @@ export default function useGridState() {
   const [bgImageEditing, setBgImageEditing] = useState(false);
   const bgDragState = useRef(null);
   const bgFileInputRef = useRef(null);
-
-  // ── Guide lines ─────────────────────────────────────────────────────────
-  const [guideLineMode, setGuideLineMode] = useState(false);
-  const [guideLines, setGuideLines] = useState([]);
-  const [guideLinePreview, setGuideLinePreview] = useState(null);
-  const guideLineStart = useRef(null);
 
   // ── File handle (File System Access API) ──────────────────────────────
   const fileHandleRef = useRef(null);
@@ -156,19 +154,6 @@ export default function useGridState() {
       return {
         r: Math.floor((e.clientY - rect.top - offset.y) / cs),
         c: Math.floor((e.clientX - rect.left - offset.x) / cs),
-      };
-    },
-    [offset, cs]
-  );
-
-  const mouseToIntersection = useCallback(
-    (e) => {
-      const rect = containerRef.current.getBoundingClientRect();
-      const gx = (e.clientX - rect.left - offset.x) / cs;
-      const gy = (e.clientY - rect.top - offset.y) / cs;
-      return {
-        r: Math.max(0, Math.min(gridRowsRef.current, Math.round(gy))),
-        c: Math.max(0, Math.min(gridColsRef.current, Math.round(gx))),
       };
     },
     [offset, cs]
@@ -279,9 +264,6 @@ export default function useGridState() {
   const bgImageEditingRef = useRef(bgImageEditing);
   bgImageEditingRef.current = bgImageEditing;
 
-  const guideLineModeRef = useRef(guideLineMode);
-  guideLineModeRef.current = guideLineMode;
-
   const onMouseDown = useCallback(
     (e) => {
       if (e.button === 1 || spaceDown.current) {
@@ -299,13 +281,6 @@ export default function useGridState() {
         return;
       }
       if (e.button !== 0) return;
-      if (guideLineModeRef.current) {
-        const inter = mouseToIntersection(e);
-        guideLineStart.current = inter;
-        setGuideLinePreview({ r1: inter.r, c1: inter.c, r2: inter.r, c2: inter.c });
-        e.preventDefault();
-        return;
-      }
       const cell = mouseToCell(e);
       if (cell.r < 0 || cell.r >= gridRowsRef.current || cell.c < 0 || cell.c >= gridColsRef.current) return;
       if (moveMode) {
@@ -319,7 +294,7 @@ export default function useGridState() {
       dragCurrent.current = cell;
       setDragRect({ start: cell, end: cell });
     },
-    [offset, mouseToCell, mouseToIntersection, moveMode]
+    [offset, mouseToCell, moveMode]
   );
 
   const onMouseMove = useCallback(
@@ -339,18 +314,6 @@ export default function useGridState() {
         }
         return;
       }
-      if (guideLineStart.current) {
-        const inter = mouseToIntersection(e);
-        const start = guideLineStart.current;
-        const dr = Math.abs(inter.r - start.r);
-        const dc = Math.abs(inter.c - start.c);
-        if (dc >= dr) {
-          setGuideLinePreview({ r1: start.r, c1: start.c, r2: start.r, c2: inter.c });
-        } else {
-          setGuideLinePreview({ r1: start.r, c1: start.c, r2: inter.r, c2: start.c });
-        }
-        return;
-      }
       if (isMoveDragging.current && moveDragStartCell.current) {
         const cell = mouseToCell(e);
         setMoveOffset({
@@ -365,7 +328,7 @@ export default function useGridState() {
         setDragRect({ start: dragStart.current, end: cell });
       }
     },
-    [mouseToCell, mouseToIntersection]
+    [mouseToCell]
   );
 
   const onMouseUp = useCallback(() => {
@@ -379,15 +342,6 @@ export default function useGridState() {
         x: panOffset.current.x + panLastMouse.current.x - panStart.current.x,
         y: panOffset.current.y + panLastMouse.current.y - panStart.current.y,
       });
-      return;
-    }
-    if (guideLineStart.current) {
-      const preview = guideLinePreview;
-      guideLineStart.current = null;
-      if (preview && (preview.r1 !== preview.r2 || preview.c1 !== preview.c2)) {
-        setGuideLines((prev) => [...prev, preview]);
-      }
-      setGuideLinePreview(null);
       return;
     }
     if (isMoveDragging.current) {
@@ -429,7 +383,7 @@ export default function useGridState() {
         }
       }
     }
-  }, [getCellsInDragRect, guideLinePreview]);
+  }, [getCellsInDragRect]);
 
   const onWheel = useCallback((e) => {
     e.preventDefault();
@@ -470,7 +424,6 @@ export default function useGridState() {
           }
           return next;
         });
-        setSelected(new Set());
         return;
       }
       const placements = [];
@@ -513,7 +466,6 @@ export default function useGridState() {
         }
         return next;
       });
-      setSelected(new Set());
     },
     [selected, moveMode, pushHistory]
   );
@@ -879,12 +831,42 @@ export default function useGridState() {
   // ═══════════════════════════════════════════════════════════════════════════
 
   const addColumn = useCallback(() => {
+    setCells((prev) => {
+      pushHistory(prev);
+      const next = new Map();
+      for (const [key, cell] of prev) {
+        if (cell.spanWidth === 0) continue;
+        const { r, c } = parseKey(key);
+        const newC = c + 1;
+        const newKey = cellKey(r, newC);
+        next.set(newKey, { symbolId: cell.symbolId, spanWidth: cell.spanWidth });
+        for (let i = 1; i < cell.spanWidth; i++) {
+          next.set(cellKey(r, newC + i), { symbolId: cell.symbolId, spanWidth: 0, spanRoot: newKey });
+        }
+      }
+      return next;
+    });
     setGridCols((prev) => prev + 1);
-  }, []);
+  }, [pushHistory]);
 
   const addRow = useCallback(() => {
+    setCells((prev) => {
+      pushHistory(prev);
+      const next = new Map();
+      for (const [key, cell] of prev) {
+        if (cell.spanWidth === 0) continue;
+        const { r, c } = parseKey(key);
+        const newR = r + 1;
+        const newKey = cellKey(newR, c);
+        next.set(newKey, { symbolId: cell.symbolId, spanWidth: cell.spanWidth });
+        for (let i = 1; i < cell.spanWidth; i++) {
+          next.set(cellKey(newR, c + i), { symbolId: cell.symbolId, spanWidth: 0, spanRoot: newKey });
+        }
+      }
+      return next;
+    });
     setGridRows((prev) => prev + 1);
-  }, []);
+  }, [pushHistory]);
 
   const insertColumnsBefore = useCallback(() => {
     if (!selected.size) return;
@@ -1221,8 +1203,43 @@ export default function useGridState() {
   // KEYBOARD SHORTCUTS
   // ═══════════════════════════════════════════════════════════════════════════
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ARROW KEY SELECTION / MOVE
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const moveArrow = useCallback((dir) => {
+    const sel = selectedRef.current;
+    if (!sel.size || bgImageEditingRef.current) return;
+
+    const dr = dir === "up" ? -1 : dir === "down" ? 1 : 0;
+    const dc = dir === "left" ? -1 : dir === "right" ? 1 : 0;
+
+    // In move mode: shift the moveOffset by one cell
+    if (moveModeRef.current) {
+      setMoveOffset((prev) => ({ dr: prev.dr + dr, dc: prev.dc + dc }));
+      return;
+    }
+
+    // Normal mode: find anchor (bottom-most row, then left-most col) and move selection
+    let anchorR = -Infinity;
+    let anchorC = Infinity;
+    for (const key of sel) {
+      const { r, c } = parseKey(key);
+      if (r > anchorR || (r === anchorR && c < anchorC)) {
+        anchorR = r;
+        anchorC = c;
+      }
+    }
+
+    const newR = anchorR + dr;
+    const newC = anchorC + dc;
+    if (newR < 0 || newR >= gridRowsRef.current || newC < 0 || newC >= gridColsRef.current) return;
+
+    setSelected(new Set([cellKey(newR, newC)]));
+  }, []);
+
   const actionsRef = useRef({});
-  actionsRef.current = { undo, redo, clearSelected, copySelected, paste, saveGridmark, endGuideLine: () => { setGuideLineMode(false); guideLineStart.current = null; setGuideLinePreview(null); } };
+  actionsRef.current = { undo, redo, clearSelected, copySelected, paste, saveGridmark, moveArrow };
 
   useEffect(() => {
     const handler = (e) => {
@@ -1232,12 +1249,6 @@ export default function useGridState() {
 
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
-
-      if (key === "escape") {
-        e.preventDefault();
-        actionsRef.current.endGuideLine();
-        return;
-      }
 
       if (ctrl && key === "s") {
         e.preventDefault();
@@ -1257,11 +1268,55 @@ export default function useGridState() {
       } else if (ctrl && key === "v") {
         e.preventDefault();
         actionsRef.current.paste();
+      } else if (["arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key)) {
+        e.preventDefault();
+        actionsRef.current.moveArrow(key.replace("arrow", ""));
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RESIZE GRID
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const resizeGrid = useCallback((newRows, newCols) => {
+    const oldRows = gridRowsRef.current;
+    const oldCols = gridColsRef.current;
+    if (newRows === oldRows && newCols === oldCols) return;
+
+    const dR = newRows - oldRows;
+    const dC = newCols - oldCols;
+
+    setCells((prev) => {
+      pushHistory(prev);
+      const next = new Map();
+      for (const [key, cell] of prev) {
+        // Only process root cells (spanWidth >= 1), skip span children
+        if (cell.spanWidth === 0) continue;
+
+        const { r, c } = parseKey(key);
+        const newR = r + dR;
+        const newC = c + dC;
+        // Skip if root falls outside new grid
+        if (newR < 0 || newR >= newRows || newC < 0) continue;
+        // Skip if span overflows right edge
+        if (newC + cell.spanWidth > newCols) continue;
+
+        const newKey = cellKey(newR, newC);
+        next.set(newKey, { symbolId: cell.symbolId, spanWidth: cell.spanWidth });
+        for (let i = 1; i < cell.spanWidth; i++) {
+          next.set(cellKey(newR, newC + i), { symbolId: cell.symbolId, spanWidth: 0, spanRoot: newKey });
+        }
+      }
+      return next;
+    });
+
+    setGridRows(newRows);
+    setGridCols(newCols);
+    setSelected(new Set());
+  }, [pushHistory]);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // RETURN
@@ -1291,10 +1346,6 @@ export default function useGridState() {
     onMouseDown, onMouseMove, onMouseUp, onWheel,
     dirtyRef,
     fileName, setFileName,
-    guideLineMode, guideLines, guideLinePreview,
-    startGuideLine: useCallback(() => { setGuideLineMode(true); setSelected(new Set()); }, []),
-    endGuideLine: useCallback(() => { setGuideLineMode(false); guideLineStart.current = null; setGuideLinePreview(null); }, []),
-    clearGuideLines: useCallback(() => setGuideLines([]), []),
-    removeLastGuideLine: useCallback(() => setGuideLines((prev) => prev.slice(0, -1)), []),
+    resizeGrid,
   };
 }

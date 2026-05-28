@@ -24,86 +24,91 @@ function DirFileRow({ item, symbols, addFromDirectory, removeFromDirectory, isCu
   return (
     <div
       style={{
-        display: "flex",
-        alignItems: "center",
-        padding: "4px 6px",
         marginLeft: (depth + 1) * 10,
         marginBottom: 2,
         background: "#0f1828",
         border: "1px solid #1a2840",
         borderRadius: 4,
-        gap: 8,
+        overflowX: "auto",
       }}
     >
       <div
         style={{
-          width: 36 * (item.defaultWidth || 1),
-          height: 36,
-          background: "#fff",
-          borderRadius: 3,
           display: "flex",
+          flexWrap: "wrap",
           alignItems: "center",
-          justifyContent: "center",
-          flexShrink: 0,
-          padding: 2,
-          boxSizing: "border-box",
+          padding: "4px 6px",
+          gap: 8,
         }}
       >
-        <img
-          src={svgToDataUrl(item.svgContent)}
-          style={{ width: "100%", height: "100%", objectFit: "contain" }}
-          alt=""
-        />
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
         <div
           style={{
-            color: "#c0c0e0",
-            fontSize: 16,
-            fontWeight: 600,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+            width: 36 * (item.defaultWidth || 1),
+            height: 36,
+            background: "#fff",
+            borderRadius: 3,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            padding: 2,
+            boxSizing: "border-box",
           }}
         >
-          {item.name}
+          <img
+            src={svgToDataUrl(item.svgContent)}
+            style={{ width: "100%", height: "100%", objectFit: "contain" }}
+            alt=""
+          />
         </div>
-        <div style={{ color: "#4a5a7a", fontSize: 12 }}>{item.defaultWidth}W</div>
-      </div>
-      <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
-        {isCustom && (
-          <button
-            onClick={() => removeFromDirectory(item.id)}
+        <div style={{ flexShrink: 0 }}>
+          <div
             style={{
-              background: "#3a1a1a",
-              border: "1px solid #5a2a2a",
+              color: "#c0c0e0",
+              fontSize: 16,
+              fontWeight: 600,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {item.name}
+          </div>
+          <div style={{ color: "#4a5a7a", fontSize: 12 }}>{item.defaultWidth}W</div>
+        </div>
+        <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
+          {isCustom && (
+            <button
+              onClick={() => removeFromDirectory(item.id)}
+              style={{
+                background: "#3a1a1a",
+                border: "1px solid #5a2a2a",
+                borderRadius: 3,
+                color: "#e94560",
+                cursor: "pointer",
+                fontSize: 12,
+                padding: "2px 6px",
+                fontWeight: 700,
+              }}
+            >
+              ✕
+            </button>
+          )}
+          <button
+            onClick={() => addFromDirectory(item)}
+            disabled={alreadyAdded}
+            style={{
+              background: alreadyAdded ? "#1a2a1a" : "#1a3a2a",
+              border: `1px solid ${alreadyAdded ? "#2a3a2a" : "#3a7a5a"}`,
               borderRadius: 3,
-              color: "#e94560",
-              cursor: "pointer",
+              color: alreadyAdded ? "#3a5a3a" : "#60d090",
+              cursor: alreadyAdded ? "default" : "pointer",
               fontSize: 12,
-              padding: "2px 6px",
+              padding: "2px 7px",
               fontWeight: 700,
             }}
           >
-            ✕
+            {alreadyAdded ? "✓" : "+"}
           </button>
-        )}
-        <button
-          onClick={() => addFromDirectory(item)}
-          disabled={alreadyAdded}
-          style={{
-            background: alreadyAdded ? "#1a2a1a" : "#1a3a2a",
-            border: `1px solid ${alreadyAdded ? "#2a3a2a" : "#3a7a5a"}`,
-            borderRadius: 3,
-            color: alreadyAdded ? "#3a5a3a" : "#60d090",
-            cursor: alreadyAdded ? "default" : "pointer",
-            fontSize: 12,
-            padding: "2px 7px",
-            fontWeight: 700,
-          }}
-        >
-          {alreadyAdded ? "✓" : "+"}
-        </button>
+        </div>
       </div>
     </div>
   );
