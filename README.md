@@ -3,4 +3,4 @@
 
 This is a Grid app specifically made for creating and editing knitting stitch charts.
 
-App can be found on <https://ni-jing.github.io/Stitch-Grid/>
+App can be found on <https://jingknits.github.io/Stitch-Grid/>
