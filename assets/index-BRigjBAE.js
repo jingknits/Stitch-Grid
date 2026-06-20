@@ -590,9 +590,11 @@ Resize/Move image to align with the grid\r
 \r
 ## KNITTING MODE\r
 Keeps track of which row you have knit till\r
+Flat/Round button: knitting in the round/back and forth\r
 **Next Row/Up/Enter:** Slash out one row\r
 **Previous Row/Down/Backspace:** Unslash one row\r
 **Click:** Slash up till clicked cell\r
+\r
 \r
 ## SELECTION HUD\r
 Rows: {num of rows selected} Cols: {num of cols selected}\r
