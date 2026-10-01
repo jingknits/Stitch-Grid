@@ -24,6 +24,35 @@ export function getOccupiedBounds(cells) {
   return { minR, maxR, minC, maxC };
 }
 
+// Guide lines are stored in absolute grid-line coordinates (0..gridRows /
+// 0..gridCols), but PNG/SVG export only renders the occupied-cells
+// bounding box, re-based so minR/minC become the origin (see the cell x/y
+// math in buildPngBlob/buildSvgBlob below). This re-bases each guide line
+// the same way and clips it to the exported crop, dropping any that fall
+// entirely outside it. A cell bounding box [minR..maxR] x [minC..maxC]
+// spans grid LINES [minR..maxR+1] x [minC..maxC+1].
+function clipGuideLinesForExport(guideLines, minR, maxR, minC, maxC) {
+  const rowLineMin = minR, rowLineMax = maxR + 1;
+  const colLineMin = minC, colLineMax = maxC + 1;
+  const out = [];
+  for (const gl of guideLines || []) {
+    if (gl.orientation === "h") {
+      if (gl.linePos < rowLineMin || gl.linePos > rowLineMax) continue;
+      const s = Math.max(gl.start, colLineMin);
+      const e = Math.min(gl.end, colLineMax);
+      if (e <= s) continue;
+      out.push({ orientation: "h", linePos: gl.linePos - rowLineMin, start: s - colLineMin, end: e - colLineMin });
+    } else {
+      if (gl.linePos < colLineMin || gl.linePos > colLineMax) continue;
+      const s = Math.max(gl.start, rowLineMin);
+      const e = Math.min(gl.end, rowLineMax);
+      if (e <= s) continue;
+      out.push({ orientation: "v", linePos: gl.linePos - colLineMin, start: s - rowLineMin, end: e - rowLineMin });
+    }
+  }
+  return out;
+}
+
 export async function svgStringToImage(svgStr, w, h) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -103,7 +132,7 @@ export async function saveBlobWithFormatPicker(formats, suggestedNameBase, getBl
 
 // Renders the grid to a PNG Blob without saving it — shared by exportAsPng
 // and the "Save as" format-choice picker.
-export async function buildPngBlob(cells, symbols, cellSize) {
+export async function buildPngBlob(cells, symbols, cellSize, guideLines = []) {
   const bounds = getOccupiedBounds(cells);
   if (!bounds) return null;
   const { minR, maxR, minC, maxC } = bounds;
@@ -168,6 +197,27 @@ export async function buildPngBlob(cells, symbols, cellSize) {
     } catch (e) { /* skip broken SVGs */ }
   }
 
+  // Guide lines — thicker, distinctly colored strokes, drawn on top of
+  // symbols so they always read clearly, re-based/clipped to this export's
+  // cropped bounding box (see clipGuideLinesForExport).
+  const clippedGuideLines = clipGuideLinesForExport(guideLines, minR, maxR, minC, maxC);
+  ctx.strokeStyle = "#8250DF";
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  for (const gl of clippedGuideLines) {
+    ctx.beginPath();
+    if (gl.orientation === "h") {
+      const y = gl.linePos * csH;
+      ctx.moveTo(gl.start * csW, y);
+      ctx.lineTo(gl.end * csW, y);
+    } else {
+      const x = gl.linePos * csW;
+      ctx.moveTo(x, gl.start * csH);
+      ctx.lineTo(x, gl.end * csH);
+    }
+    ctx.stroke();
+  }
+
   // Perimeter row/column counts, relative to the exported (saved) portion:
   // bottom-right corner is 1, increasing going up (rows) and left (columns).
   ctx.fillStyle = "#7d88b5";
@@ -196,8 +246,8 @@ export async function buildPngBlob(cells, symbols, cellSize) {
   return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
 }
 
-export async function exportAsPng(cells, symbols, cellSize, fileName) {
-  const blob = await buildPngBlob(cells, symbols, cellSize);
+export async function exportAsPng(cells, symbols, cellSize, fileName, guideLines = []) {
+  const blob = await buildPngBlob(cells, symbols, cellSize, guideLines);
   if (blob) {
     await saveBlobWithPicker(blob, (fileName || "gridmark-export") + ".png", "PNG Image", { "image/png": [".png"] });
   }
@@ -205,7 +255,7 @@ export async function exportAsPng(cells, symbols, cellSize, fileName) {
 
 // Renders the grid to an SVG Blob without saving it — shared by exportAsSvg
 // and the "Save as" format-choice picker.
-export async function buildSvgBlob(cells, symbols, cellSize) {
+export async function buildSvgBlob(cells, symbols, cellSize, guideLines = []) {
   const bounds = getOccupiedBounds(cells);
   if (!bounds) return null;
   const { minR, maxR, minC, maxC } = bounds;
@@ -266,6 +316,24 @@ export async function buildSvgBlob(cells, symbols, cellSize) {
     svgParts.push(`<image x="${x + 2}" y="${y + 2}" width="${w - 4}" height="${csH - 4}" href="${dataUrl}"/>`);
   }
 
+  // Guide lines — thicker, distinctly colored strokes, drawn on top of
+  // symbols so they always read clearly, re-based/clipped to this export's
+  // cropped bounding box (see clipGuideLinesForExport).
+  const clippedGuideLines = clipGuideLinesForExport(guideLines, minR, maxR, minC, maxC);
+  if (clippedGuideLines.length) {
+    svgParts.push(`<g stroke="#8250DF" stroke-width="3" stroke-linecap="round">`);
+    for (const gl of clippedGuideLines) {
+      if (gl.orientation === "h") {
+        const y = gl.linePos * csH;
+        svgParts.push(`<line x1="${gl.start * csW}" y1="${y}" x2="${gl.end * csW}" y2="${y}"/>`);
+      } else {
+        const x = gl.linePos * csW;
+        svgParts.push(`<line x1="${x}" y1="${gl.start * csH}" x2="${x}" y2="${gl.end * csH}"/>`);
+      }
+    }
+    svgParts.push(`</g>`);
+  }
+
   // Perimeter row/column counts, relative to the exported (saved) portion:
   // bottom-right corner is 1, increasing going up (rows) and left (columns).
   svgParts.push(`<g fill="#7d88b5" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="${fontSize}">`);
@@ -290,14 +358,14 @@ export async function buildSvgBlob(cells, symbols, cellSize) {
   return new Blob([svgStr], { type: "image/svg+xml" });
 }
 
-export async function exportAsSvg(cells, symbols, cellSize, fileName) {
-  const blob = await buildSvgBlob(cells, symbols, cellSize);
+export async function exportAsSvg(cells, symbols, cellSize, fileName, guideLines = []) {
+  const blob = await buildSvgBlob(cells, symbols, cellSize, guideLines);
   if (blob) {
     await saveBlobWithPicker(blob, (fileName || "gridmark-export") + ".svg", "SVG Image", { "image/svg+xml": [".svg"] });
   }
 }
 
-export async function exportGridmarkJson(cells, symbols, gridRows, gridCols, cellAspect, bgImage) {
+export async function exportGridmarkJson(cells, symbols, gridRows, gridCols, cellAspect, bgImage, guideLines = []) {
   const cellsArr = [];
   for (const [key, cell] of cells) {
     cellsArr.push({ key, ...cell });
@@ -320,6 +388,7 @@ export async function exportGridmarkJson(cells, symbols, gridRows, gridCols, cel
     bgImage: bgImage || null,
     symbols: usedSymbols,
     cells: cellsArr,
+    guideLines: (guideLines || []).map((g) => ({ ...g })),
   };
   const json = JSON.stringify(data, null, 2);
   const blob = new Blob([json], { type: "application/json" });

@@ -97,6 +97,9 @@ const ICON_PATHS = {
     "M1.5 1h13l.5.5v13l-.5.5h-13l-.5-.5v-13l.5-.5zM2 14h12v-12h-12v12z",
     "M1 4.25 h13 v1 h-13 v-1z M1 7.5 h13 v1 h-13 v-1z M1 10.75 h13 v1 h-13 v-1z",
   ],
+  // "Add" plus icon (from add.svg) used for Guide Line entries in the Edit
+  // menu's Cut/Copy/Paste flyouts.
+  guideLine: "M14 6.75v1.5H8.25V14h-1.5V8.25H1v-1.5h5.75V1h1.5v5.75H14z",
 };
 
 // App icon shown at the very left of the top bar (VS Code-style corner
@@ -1316,6 +1319,15 @@ const COLOR_FILL_SVG = {
   ],
 };
 
+// "Add" plus icon (from add.svg), reused as the toolbar's "Guide Line mode"
+// icon — native 16x16 viewBox, unlike the other mode icons' 0-24, but
+// ModeBtn scales whatever viewBox is given so this renders at the same
+// size as its neighbors.
+const GUIDE_LINE_MODE_SVG = {
+  viewBox: "0 0 16 16",
+  paths: [{ d: "M14 6.75v1.5H8.25V14h-1.5V8.25H1v-1.5h5.75V1h1.5v5.75H14z", fill: "fill" }],
+};
+
 function FileNameDisplay({ fileName, setFileName }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(fileName);
@@ -1641,7 +1653,7 @@ function ContextEditMenu({ items, x, y, onClose, lastUsedSymbol, onUseLastSymbol
 // TOP BAR
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export default function TopBar({ selected, setSelected, historyLen, undo, redo, clipboard, copySelected, paste, colorClipboard, copySelectedColor, pasteColor, symbolClipboard, copySelectedSymbol, pasteSymbol, cutSelectedSymbols, mirrorUp, mirrorDown, mirrorLeft, mirrorRight, flipHorizontal, flipVertical, clearSelected, clearSelectedColors, colorSelectedCells, clearAllCells, clearAllColors, setShowConfirm, cells, symbols, bgImage, bgImageEditing, bgFileInputRef, handleBgImageUpload, bgImageFix, bgImageEdit, bgImageRemove, applyBgImageToColors, addColumn, addRow, insertColumnsBefore, insertColumnsAfter, insertRowBefore, insertRowAfter, removeSelectedColumns, removeSelectedRows, importGridmark, saveGridmark, saveError, resizeGrid, resizeCell, cellAspect, gridRows, gridCols, knittingMode, toggleKnittingMode, fileName, setFileName, cellColor, setCellColor, fillMode, setFillMode, fitGridToPage, memoOpen, onMemoToggle, contextMenuPos, onContextMenuClose, openFind, openReplace, lastUsedSymbolId, placeSymbol, rowShading = "none", setRowShading, zoom, setZoom, saveGroup }) {
+export default function TopBar({ selected, setSelected, historyLen, undo, redo, clipboard, copySelected, paste, colorClipboard, copySelectedColor, pasteColor, symbolClipboard, copySelectedSymbol, pasteSymbol, cutSelectedSymbols, mirrorUp, mirrorDown, mirrorLeft, mirrorRight, flipHorizontal, flipVertical, clearSelected, clearSelectedColors, colorSelectedCells, clearAllCells, clearAllColors, setShowConfirm, cells, symbols, bgImage, bgImageEditing, bgFileInputRef, handleBgImageUpload, bgImageFix, bgImageEdit, bgImageRemove, applyBgImageToColors, addColumn, addRow, insertColumnsBefore, insertColumnsAfter, insertRowBefore, insertRowAfter, removeSelectedColumns, removeSelectedRows, importGridmark, saveGridmark, saveError, resizeGrid, resizeCell, cellAspect, gridRows, gridCols, knittingMode, toggleKnittingMode, fileName, setFileName, cellColor, setCellColor, fillMode, setFillMode, fitGridToPage, memoOpen, onMemoToggle, contextMenuPos, onContextMenuClose, openFind, openReplace, lastUsedSymbolId, placeSymbol, rowShading = "none", setRowShading, zoom, setZoom, saveGroup, guideLines = [], guideLineMode = false, toggleGuideLineMode, selectedGuideLineId = null, guideLineClipboard = null, copyGuideLine, cutGuideLine, pasteGuideLine }) {
   const importFileRef = useRef(null);
   const hasContent = cells.size > 0;
   let hasSymbolsUsed = false;
@@ -1695,33 +1707,36 @@ export default function TopBar({ selected, setSelected, historyLen, undo, redo, 
       flyout: true,
       icon: { d: ICON_PATHS.cut },
       label: "Cut",
-      disabled: menusDisabled || !hasSel,
+      disabled: menusDisabled,
       items: [
         { icon: { d: ICON_PATHS.cut }, label: "All", shortcut: modKey("X"), onClick: clearSelected, disabled: menusDisabled || !hasSel },
         { icon: { d: ICON_PATHS.clearAllColors }, label: "Color", onClick: clearSelectedColors, disabled: menusDisabled || !hasSel },
         { icon: { d: ICON_PATHS.edit }, label: "Symbol", onClick: cutSelectedSymbols, disabled: menusDisabled || !hasSel },
+        { icon: { d: ICON_PATHS.guideLine }, label: "Guide Line", onClick: cutGuideLine, disabled: menusDisabled || !selectedGuideLineId },
       ],
     },
     {
       flyout: true,
       icon: { d: ICON_PATHS.copy },
       label: "Copy",
-      disabled: menusDisabled || !hasSel,
+      disabled: menusDisabled,
       items: [
         { icon: { d: ICON_PATHS.copy }, label: "All", shortcut: modKey("C"), onClick: copySelected, disabled: menusDisabled || !hasSel },
         { icon: { d: ICON_PATHS.clearAllColors }, label: "Color", onClick: copySelectedColor, disabled: menusDisabled || !hasSel },
         { icon: { d: ICON_PATHS.edit }, label: "Symbol", onClick: copySelectedSymbol, disabled: menusDisabled || !hasSel },
+        { icon: { d: ICON_PATHS.guideLine }, label: "Guide Line", onClick: copyGuideLine, disabled: menusDisabled || !selectedGuideLineId },
       ],
     },
     {
       flyout: true,
       icon: { d: ICON_PATHS.paste },
       label: "Paste",
-      disabled: menusDisabled || !hasSel,
+      disabled: menusDisabled,
       items: [
         { icon: { d: ICON_PATHS.paste }, label: "All", shortcut: modKey("V"), onClick: paste, disabled: menusDisabled || !clipboard || !hasSel },
         { icon: { d: ICON_PATHS.clearAllColors }, label: "Color", onClick: pasteColor, disabled: menusDisabled || !colorClipboard || !hasSel },
         { icon: { d: ICON_PATHS.edit }, label: "Symbol", onClick: pasteSymbol, disabled: menusDisabled || !symbolClipboard || !hasSel },
+        { icon: { d: ICON_PATHS.guideLine }, label: "Guide Line", onClick: pasteGuideLine, disabled: menusDisabled || !guideLineClipboard },
       ],
     },
     { icon: { d: ICON_PATHS.group }, label: "Group", onClick: saveGroup, disabled: menusDisabled || !hasSel },
@@ -1838,10 +1853,10 @@ export default function TopBar({ selected, setSelected, historyLen, undo, redo, 
       ],
       fileName || "gridmark-export",
       async (ext) => ext === ".png"
-        ? buildPngBlob(cells, symbols, cellSize)
-        : buildSvgBlob(cells, symbols, cellSize),
+        ? buildPngBlob(cells, symbols, cellSize, guideLines)
+        : buildSvgBlob(cells, symbols, cellSize, guideLines),
     );
-  }, [cells, symbols, cellAspect, fileName]);
+  }, [cells, symbols, cellAspect, fileName, guideLines]);
 
   const fileItems = [
     { icon: { d: ICON_PATHS.import }, label: "Import", color: "#8250DF", onClick: handleImport, disabled: menusDisabled },
@@ -1884,7 +1899,17 @@ export default function TopBar({ selected, setSelected, historyLen, undo, redo, 
           {fillMode && (
             <style>{`[data-grid-canvas], [data-grid-canvas] * { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' fill='%23ffffff' stroke='%23000' stroke-width='1' d='M20 14c-.092.064-2 2.083-2 3.5 0 1.494.949 2.448 2 2.5.906.044 2-.891 2-2.5 0-1.5-1.908-3.436-2-3.5zM9.586 20c.378.378.88.586 1.414.586s1.036-.208 1.414-.586l7-7-.707-.707L11 4.586 8.707 2.293 7.293 3.707 9.586 6 4 11.586c-.378.378-.586.88-.586 1.414s.208 1.036.586 1.414L9.586 20zM11 7.414 16.586 13H5.414L11 7.414z'/%3E%3C/svg%3E") 10 20, crosshair !important; }`}</style>
           )}
-          <ModeBtn svg={MOUSE_POINTER_SVG} label="Select mode" active={!fillMode} onClick={() => setFillMode(false)} disabled={allDisabled} />
+          <ModeBtn svg={MOUSE_POINTER_SVG} label="Select mode" active={!fillMode && !guideLineMode} onClick={() => { setFillMode(false); if (guideLineMode) toggleGuideLineMode(); }} disabled={allDisabled} />
+          <ModeBtn
+            svg={GUIDE_LINE_MODE_SVG}
+            label="Guide line mode"
+            active={guideLineMode}
+            onClick={() => {
+              toggleGuideLineMode();
+              setSelected(new Set());
+            }}
+            disabled={allDisabled}
+          />
           <ModeBtn
             svg={COLOR_FILL_SVG}
             label="Fill mode"
@@ -1892,6 +1917,7 @@ export default function TopBar({ selected, setSelected, historyLen, undo, redo, 
             onClick={() => {
               setFillMode(true);
               setSelected(new Set());
+              if (guideLineMode) toggleGuideLineMode();
             }}
             disabled={allDisabled}
           />

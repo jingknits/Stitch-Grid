@@ -532,6 +532,15 @@ export default function GridCanvas({
   setReplaceColorEnabled = null,
   findHighlight = null,
   rowShading = "none",
+  guideLines = [],
+  guideLineDraft = null,
+  guideLineMode = false,
+  selectedGuideLineId = null,
+  selectGuideLine = null,
+  startGuideLineCreate = null,
+  startGuideLineMove = null,
+  startGuideLineCapDrag = null,
+  handlePointerGestureStart = null,
 }) {
   const { r0, r1, c0, c1 } = getViewport();
 
@@ -639,6 +648,18 @@ export default function GridCanvas({
 
   // Fill mode — track whether the primary button is held for drag-to-fill
   const fillDragging = useRef(false);
+
+  // Guide-line hit targets: the visible line is only 4px wide, which a
+  // finger easily misses (and then starts a new line instead of moving the
+  // existing one). On devices with any touch/coarse pointer, widen the
+  // invisible hit band around each line body and end cap. (Guide lines
+  // only take input in Guide Line mode, so this never blocks cell clicks
+  // in Select/Fill/knitting mode.)
+  const [coarsePointer] = useState(
+    () => typeof window !== "undefined" && !!window.matchMedia?.("(any-pointer: coarse)").matches
+  );
+  const GL_HIT_WIDTH = coarsePointer ? 22 : 10;
+  const GL_CAP_HIT = coarsePointer ? 14 : 7; // half-size of the cap's hit square
 
   // Long-press → context menu (touch has no right-click). Only armed for
   // touch pointers; cancelled if the finger moves past a small threshold
@@ -825,9 +846,20 @@ export default function GridCanvas({
         touchAction: "none",
         WebkitUserSelect: "none",
         userSelect: "none",
-        cursor: fillMode && !spaceDown.current ? "crosshair" : knittingMode ? (spaceDown.current ? "grab" : "crosshair") : bgImageEditing ? "grab" : movingSelection ? "grab" : spaceDown.current ? "grab" : "crosshair",
+        cursor: guideLineMode ? "crosshair" : fillMode && !spaceDown.current ? "crosshair" : knittingMode ? (spaceDown.current ? "grab" : "crosshair") : bgImageEditing ? "grab" : movingSelection ? "grab" : spaceDown.current ? "grab" : "crosshair",
       }}
       onPointerDown={(e) => {
+        if (guideLineMode) {
+          // No long-press context menu here: a touch press that holds still
+          // before dragging is the start of a new guide line, and the menu
+          // popping up mid-gesture would interrupt it.
+          // Let a second finger (pinch/pan) or a middle-click/space-pan
+          // through to the normal panning logic instead of treating it as
+          // a guide-line click.
+          if (handlePointerGestureStart?.(e)) return;
+          startGuideLineCreate?.(e);
+          return;
+        }
         handleLongPressStart(e);
         if (!handleFillMouseDown(e) && !handleKnittingClick(e)) onMouseDown(e);
       }}
@@ -926,8 +958,8 @@ export default function GridCanvas({
               boxSizing: "border-box",
               willChange: "transform",
             }}
-            onPointerDown={(e) => e.stopPropagation()}
-            onMouseDown={(e) => bgImageStartDrag(e, "move")}
+            onPointerDown={(e) => { e.stopPropagation(); bgImageStartDrag(e, "move"); }}
+            onMouseDown={(e) => e.stopPropagation()}
           >
             {/* Corner: bottom-right (proportional resize) */}
             <div
@@ -936,8 +968,8 @@ export default function GridCanvas({
                 background: "#CA5010", border: "2px solid #F5F5F5", borderRadius: 3,
                 cursor: "nwse-resize", pointerEvents: "auto",
               }}
-              onPointerDown={(e) => e.stopPropagation()}
-              onMouseDown={(e) => { e.stopPropagation(); bgImageStartDrag(e, "resize"); }}
+              onPointerDown={(e) => { e.stopPropagation(); bgImageStartDrag(e, "resize"); }}
+              onMouseDown={(e) => e.stopPropagation()}
             />
             {/* Corner: top-left (proportional resize) */}
             <div
@@ -946,8 +978,8 @@ export default function GridCanvas({
                 background: "#CA5010", border: "2px solid #F5F5F5", borderRadius: 3,
                 cursor: "nwse-resize", pointerEvents: "auto",
               }}
-              onPointerDown={(e) => e.stopPropagation()}
-              onMouseDown={(e) => { e.stopPropagation(); bgImageStartDrag(e, "resize-tl"); }}
+              onPointerDown={(e) => { e.stopPropagation(); bgImageStartDrag(e, "resize-tl"); }}
+              onMouseDown={(e) => e.stopPropagation()}
             />
             {/* Edge: mid-right (stretch horizontal) */}
             <div
@@ -956,8 +988,8 @@ export default function GridCanvas({
                 width: 10, height: 22, background: "#CA5010", border: "2px solid #F5F5F5",
                 borderRadius: 3, cursor: "ew-resize", pointerEvents: "auto",
               }}
-              onPointerDown={(e) => e.stopPropagation()}
-              onMouseDown={(e) => { e.stopPropagation(); bgImageStartDrag(e, "stretch-right"); }}
+              onPointerDown={(e) => { e.stopPropagation(); bgImageStartDrag(e, "stretch-right"); }}
+              onMouseDown={(e) => e.stopPropagation()}
             />
             {/* Edge: mid-left (stretch horizontal) */}
             <div
@@ -966,8 +998,8 @@ export default function GridCanvas({
                 width: 10, height: 22, background: "#CA5010", border: "2px solid #F5F5F5",
                 borderRadius: 3, cursor: "ew-resize", pointerEvents: "auto",
               }}
-              onPointerDown={(e) => e.stopPropagation()}
-              onMouseDown={(e) => { e.stopPropagation(); bgImageStartDrag(e, "stretch-left"); }}
+              onPointerDown={(e) => { e.stopPropagation(); bgImageStartDrag(e, "stretch-left"); }}
+              onMouseDown={(e) => e.stopPropagation()}
             />
             {/* Edge: mid-bottom (stretch vertical) */}
             <div
@@ -976,8 +1008,8 @@ export default function GridCanvas({
                 width: 22, height: 10, background: "#CA5010", border: "2px solid #F5F5F5",
                 borderRadius: 3, cursor: "ns-resize", pointerEvents: "auto",
               }}
-              onPointerDown={(e) => e.stopPropagation()}
-              onMouseDown={(e) => { e.stopPropagation(); bgImageStartDrag(e, "stretch-bottom"); }}
+              onPointerDown={(e) => { e.stopPropagation(); bgImageStartDrag(e, "stretch-bottom"); }}
+              onMouseDown={(e) => e.stopPropagation()}
             />
             {/* Edge: mid-top (stretch vertical) */}
             <div
@@ -986,8 +1018,8 @@ export default function GridCanvas({
                 width: 22, height: 10, background: "#CA5010", border: "2px solid #F5F5F5",
                 borderRadius: 3, cursor: "ns-resize", pointerEvents: "auto",
               }}
-              onPointerDown={(e) => e.stopPropagation()}
-              onMouseDown={(e) => { e.stopPropagation(); bgImageStartDrag(e, "stretch-top"); }}
+              onPointerDown={(e) => { e.stopPropagation(); bgImageStartDrag(e, "stretch-top"); }}
+              onMouseDown={(e) => e.stopPropagation()}
             />
           </div>
         </div>
@@ -1061,6 +1093,77 @@ export default function GridCanvas({
             );
           })}
         </div>
+
+        {/* Guide lines — thicker, distinctly colored lines snapped to grid
+            lines. Rendered above symbols so they always read clearly.
+            The parent <svg> is pointer-events:none so empty space in this
+            layer never blocks clicks; each line/cap opts back in via its
+            own pointerEvents style, matching the layering convention used
+            elsewhere in this file. */}
+        <svg style={{ position: "absolute", left: 0, top: 0, width: gridCols * csW, height: gridRows * csH, pointerEvents: "none", zIndex: 15, overflow: "visible" }}>
+          {guideLines.map((gl) => {
+            const g = (guideLineDraft && guideLineDraft.id === gl.id) ? guideLineDraft : gl;
+            const isSelected = selectedGuideLineId === gl.id;
+            const x1 = g.orientation === "h" ? g.start * csW : g.linePos * csW;
+            const y1 = g.orientation === "h" ? g.linePos * csH : g.start * csH;
+            const x2 = g.orientation === "h" ? g.end * csW : g.linePos * csW;
+            const y2 = g.orientation === "h" ? g.linePos * csH : g.end * csH;
+            const CAP = 5;
+            return (
+              <g key={gl.id}>
+                {/* Visible line — purely visual; the hit band below handles input. */}
+                <line
+                  x1={x1} y1={y1} x2={x2} y2={y2}
+                  stroke="#000000" strokeWidth={4} strokeLinecap="round"
+                  style={{ pointerEvents: "none" }}
+                />
+                {/* Invisible, wider hit band for moving the line (mouse or
+                    one-finger touch drag). Guide lines are only interactive
+                    in Guide Line mode — in every other mode they're display
+                    only, so clicks/touches pass straight through to cells. */}
+                <line
+                  x1={x1} y1={y1} x2={x2} y2={y2}
+                  stroke="transparent" strokeWidth={GL_HIT_WIDTH} strokeLinecap="round"
+                  style={{ pointerEvents: guideLineMode ? "stroke" : "none", cursor: "move" }}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    selectGuideLine?.(gl.id);
+                    startGuideLineMove?.(e, gl.id);
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                />
+                {isSelected && guideLineMode && [["start", x1, y1], ["end", x2, y2]].map(([which, cx, cy]) => (
+                  <g key={which}>
+                    <rect
+                      x={cx - CAP} y={cy - CAP} width={CAP * 2} height={CAP * 2}
+                      fill="#8250DF" stroke="#FFFFFF" strokeWidth={1.5}
+                      style={{ pointerEvents: "none" }}
+                    />
+                    {/* Invisible, larger hit square for the end cap. Drawn
+                        after the body's hit band so caps win where they overlap. */}
+                    <rect
+                      x={cx - GL_CAP_HIT} y={cy - GL_CAP_HIT} width={GL_CAP_HIT * 2} height={GL_CAP_HIT * 2}
+                      fill="transparent"
+                      style={{ pointerEvents: "all", cursor: "crosshair" }}
+                      onPointerDown={(e) => { e.stopPropagation(); startGuideLineCapDrag?.(e, gl.id, which); }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    />
+                  </g>
+                ))}
+              </g>
+            );
+          })}
+          {/* In-progress creation preview (dotted, not yet a real guide line) */}
+          {guideLineDraft && guideLineDraft.id === null && (
+            <line
+              x1={guideLineDraft.orientation === "h" ? guideLineDraft.start * csW : guideLineDraft.linePos * csW}
+              y1={guideLineDraft.orientation === "h" ? guideLineDraft.linePos * csH : guideLineDraft.start * csH}
+              x2={guideLineDraft.orientation === "h" ? guideLineDraft.end * csW : guideLineDraft.linePos * csW}
+              y2={guideLineDraft.orientation === "h" ? guideLineDraft.linePos * csH : guideLineDraft.end * csH}
+              stroke="#8250DF" strokeWidth={4} strokeLinecap="round" strokeDasharray="0.5 8" opacity={0.9}
+            />
+          )}
+        </svg>
 
         {/* Selection borders */}
         <div style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none", zIndex: 20 }}>
