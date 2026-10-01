@@ -38,10 +38,17 @@ export default function App() {
     if (typeof restoredMemo === "string") setMemoText(restoredMemo);
   }, [state.importGridmark]);
 
-  // Deactivate fill mode when knitting mode or bg editing is active
+  // Deactivate fill mode when knitting mode, bg editing, or guide-line
+  // drawing mode is active — these are mutually exclusive canvas modes.
   useEffect(() => {
-    if (knittingMode || state.bgImageEditing) setFillMode(false);
-  }, [knittingMode, state.bgImageEditing]);
+    if (knittingMode || state.bgImageEditing || state.guideLineMode) setFillMode(false);
+  }, [knittingMode, state.bgImageEditing, state.guideLineMode]);
+
+  // Exiting to knitting mode or bg-image editing should also drop out of
+  // guide-line drawing mode, same exclusivity as above.
+  useEffect(() => {
+    if ((knittingMode || state.bgImageEditing) && state.guideLineMode) state.setGuideLineMode(false);
+  }, [knittingMode, state.bgImageEditing, state.guideLineMode, state.setGuideLineMode]);
 
   const toggleKnittingMode = useCallback(() => {
     setKnittingMode((prev) => {
@@ -161,7 +168,11 @@ export default function App() {
         bgImage={state.bgImage} bgImageEditing={knittingMode ? false : state.bgImageEditing} bgImageStartDrag={state.bgImageStartDrag}
         bgImageFix={state.bgImageFix} bgImageRemove={state.bgImageRemove} setBgImageOpacity={state.setBgImageOpacity}
         gridRows={state.gridRows} gridCols={state.gridCols}
-        guideLineMode={knittingMode ? false : state.guideLineMode} guideLines={state.guideLines} guideLinePreview={knittingMode ? null : state.guideLinePreview}
+        guideLines={state.guideLines} guideLineDraft={knittingMode ? null : state.guideLineDraft}
+        guideLineMode={knittingMode ? false : state.guideLineMode} selectedGuideLineId={knittingMode ? null : state.selectedGuideLineId}
+        selectGuideLine={state.selectGuideLine} startGuideLineCreate={state.startGuideLineCreate}
+        handlePointerGestureStart={state.handlePointerGestureStart}
+        startGuideLineMove={state.startGuideLineMove} startGuideLineCapDrag={state.startGuideLineCapDrag}
         knittingMode={knittingMode} slashedRows={slashedRows} onNextRow={knitNextRow} onPrevRow={knitPrevRow}
         fillMode={fillMode} fillCell={state.fillCell} onFillMouseUp={state.resetFillCell}
         onContextMenu={(x, y) => setContextMenuPos({ x, y })}
@@ -200,8 +211,10 @@ export default function App() {
         removeSelectedColumns={state.removeSelectedColumns} removeSelectedRows={state.removeSelectedRows}
         importGridmark={importGridmark} saveGridmark={state.saveGridmark} saveError={state.saveError}
         gridRows={state.gridRows} gridCols={state.gridCols}
-        guideLineMode={state.guideLineMode} startGuideLine={state.startGuideLine} endGuideLine={state.endGuideLine}
-        guideLines={state.guideLines} clearGuideLines={state.clearGuideLines} removeLastGuideLine={state.removeLastGuideLine}
+        guideLines={state.guideLines}
+        guideLineMode={state.guideLineMode} toggleGuideLineMode={state.toggleGuideLineMode}
+        selectedGuideLineId={state.selectedGuideLineId} guideLineClipboard={state.guideLineClipboard}
+        copyGuideLine={state.copyGuideLine} cutGuideLine={state.cutGuideLine} pasteGuideLine={state.pasteGuideLine}
         knittingMode={knittingMode} toggleKnittingMode={toggleKnittingMode}
         fileName={state.fileName} setFileName={state.setFileName}
         resizeGrid={state.resizeGrid} resizeCell={state.resizeCell} cellAspect={state.cellAspect}

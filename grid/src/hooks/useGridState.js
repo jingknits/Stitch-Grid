@@ -154,6 +154,52 @@ export default function useGridState() {
   const bgDragState = useRef(null);
   const bgFileInputRef = useRef(null);
 
+  // ── Guide lines ────────────────────────────────────────────────────────
+  // A guide line is { id, orientation: 'h'|'v', linePos, start, end }.
+  // linePos is the grid-line index it sits on (a row index if horizontal,
+  // a column index if vertical); start/end are the two endpoint positions
+  // along the perpendicular axis, clamped to [0, gridCols]/[0, gridRows].
+  // Guide lines are persisted content — saved into the JSON export and
+  // drawn into PNG/SVG export — and every create/move/resize/flip/delete
+  // goes through pushHistory like any other cell mutation (see the
+  // combined {cells, guideLines} history-stack entries below).
+  const [guideLines, setGuideLines] = useState([]);
+  const guideLinesRef = useRef(guideLines);
+  guideLinesRef.current = guideLines;
+
+  const [selectedGuideLineId, setSelectedGuideLineId] = useState(null);
+  const selectedGuideLineIdRef = useRef(selectedGuideLineId);
+  selectedGuideLineIdRef.current = selectedGuideLineId;
+
+  // Toggle that puts the canvas into "draw a guide line" mode — click-drag
+  // along a grid line to create one, same exclusive-mode convention as
+  // knittingMode/fillMode/bgImageEditing.
+  const [guideLineMode, setGuideLineMode] = useState(false);
+  const toggleGuideLineMode = useCallback(() => {
+    setGuideLineMode((p) => !p);
+    setSelectedGuideLineId(null);
+  }, []);
+
+  // Live preview shown during an in-progress create/move/resize(+flip)
+  // drag. id === null means an in-progress creation, not yet committed to
+  // guideLines; otherwise id matches the guideLines entry being dragged,
+  // whose committed fields are overridden by this preview until the drag
+  // commits on mouse-up.
+  const [guideLineDraft, setGuideLineDraft] = useState(null);
+
+  // Fourth, dedicated clipboard slot for guide lines (alongside clipboard/
+  // colorClipboard/symbolClipboard) — holds one { orientation, linePos,
+  // start, end } snapshot (no id, so pasting always creates a fresh one).
+  const [guideLineClipboard, setGuideLineClipboard] = useState(null);
+  // Tracks whether Ctrl+C/X most recently copied a guide line or cell
+  // content, so a bare Ctrl+V knows which clipboard to paste from.
+  const lastClipboardKindRef = useRef("cell");
+
+  const guideLineIdCounter = useRef(0);
+  const genGuideLineId = () => `gl_${Date.now()}_${guideLineIdCounter.current++}`;
+
+  const clampInt = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.round(v)));
+
   // ── File handle (File System Access API) ──────────────────────────────
   const fileHandleRef = useRef(null);
   const [saveError, setSaveError] = useState(null);
@@ -228,12 +274,18 @@ export default function useGridState() {
 
   const pushHistoryGuard = useRef(false);
 
+  // History-stack entries snapshot both `cells` and `guideLines` together —
+  // guideLinesRef is declared above (Guide lines section) — so a single
+  // Ctrl+Z/Ctrl+Y undoes/redoes whichever of the two actually changed,
+  // without every existing pushHistory(prevCells) call site needing to
+  // change: they still just pass the pre-edit cells Map, and the current
+  // guideLines are captured automatically alongside it.
   const pushHistory = useCallback((prevCells) => {
     if (pushHistoryGuard.current) return;
     pushHistoryGuard.current = true;
     // Reset after the current microtask so the next independent action can push
     Promise.resolve().then(() => { pushHistoryGuard.current = false; });
-    undoStack.current.push([...prevCells]);
+    undoStack.current.push({ cells: [...prevCells], guideLines: guideLinesRef.current.map((g) => ({ ...g })) });
     if (undoStack.current.length > MAX_HISTORY) undoStack.current.shift();
     redoStack.current = [];
     setHistoryLen({ undo: undoStack.current.length, redo: 0 });
@@ -245,37 +297,43 @@ export default function useGridState() {
 
   const undo = useCallback(() => {
     if (!undoStack.current.length) return;
-    const prev = undoStack.current.pop();
+    const entry = undoStack.current.pop();
     undoGuard.current = false;
     setCells((cur) => {
       if (!undoGuard.current) {
         undoGuard.current = true;
-        redoStack.current.push([...cur]);
+        redoStack.current.push({ cells: [...cur], guideLines: guideLinesRef.current.map((g) => ({ ...g })) });
         setHistoryLen({
           undo: undoStack.current.length,
           redo: redoStack.current.length,
         });
       }
-      return new Map(prev);
+      return new Map(entry.cells);
     });
+    setGuideLines(entry.guideLines.map((g) => ({ ...g })));
+    setSelectedGuideLineId(null);
+    setGuideLineDraft(null);
     dirtyRef.current = true;
   }, []);
 
   const redo = useCallback(() => {
     if (!redoStack.current.length) return;
-    const next = redoStack.current.pop();
+    const entry = redoStack.current.pop();
     redoGuard.current = false;
     setCells((cur) => {
       if (!redoGuard.current) {
         redoGuard.current = true;
-        undoStack.current.push([...cur]);
+        undoStack.current.push({ cells: [...cur], guideLines: guideLinesRef.current.map((g) => ({ ...g })) });
         setHistoryLen({
           undo: undoStack.current.length,
           redo: redoStack.current.length,
         });
       }
-      return new Map(next);
+      return new Map(entry.cells);
     });
+    setGuideLines(entry.guideLines.map((g) => ({ ...g })));
+    setSelectedGuideLineId(null);
+    setGuideLineDraft(null);
     dirtyRef.current = true;
   }, []);
 
@@ -483,52 +541,76 @@ export default function useGridState() {
   const bgImageEditingRef = useRef(bgImageEditing);
   bgImageEditingRef.current = bgImageEditing;
 
+  // Shared gesture-start handling for pinch-zoom, two-finger pan, and
+  // middle-click/space/bg-image-edit panning. Used as a prefix by both
+  // normal cell interaction (onMouseDown) and guide-line creation, so a
+  // second finger landing or a middle-click always pans/pinches the grid
+  // instead of being swallowed by whichever single-pointer mode happens to
+  // be active (e.g. guide-line mode intercepting every pointerdown to
+  // place guide-line points). Returns true if the event was fully handled
+  // here (caller should do nothing else with it); false for a plain
+  // left-button, single-pointer down that the caller should still
+  // interpret itself (a normal cell click, or a guide-line creation click).
+  const handlePointerGestureStart = useCallback((e) => {
+    if (e.pointerId !== undefined) {
+      activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
+    // A second finger landing while one is already down starts a pinch
+    // gesture instead: cancel any in-progress single-pointer interaction
+    // (selection box, move-drag, space/middle-button pan, or a guide-line
+    // creation waiting on its second click) and hand off to onMouseMove's
+    // pinch handling below.
+    if (activePointers.current.size >= 2) {
+      isPanning.current = false;
+      isDragging.current = false;
+      setDragRect(null);
+      if (isMoveDragging.current) {
+        isMoveDragging.current = false;
+        moveDragStartCell.current = null;
+        moveDragBounds.current = null;
+        setMovingSelection(false);
+      }
+      cancelGuideLineCreate();
+      const pts = Array.from(activePointers.current.values()).slice(0, 2);
+      const [p1, p2] = pts;
+      pinchState.current = {
+        startDist: Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1,
+        startZoom: zoomRef.current,
+        startMid: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 },
+        startOffset: { ...offsetRef.current },
+      };
+      return true;
+    }
+
+    if (e.button === 1 || spaceDown.current) {
+      isPanning.current = true;
+      panStart.current = { x: e.clientX, y: e.clientY };
+      panOffset.current = { ...offset };
+      e.preventDefault();
+      return true;
+    }
+    if (bgImageEditingRef.current) {
+      isPanning.current = true;
+      panStart.current = { x: e.clientX, y: e.clientY };
+      panOffset.current = { ...offset };
+      e.preventDefault();
+      return true;
+    }
+    if (e.button !== 0) return true;
+
+    return false;
+  }, [offset]);
+
   const onMouseDown = useCallback(
     (e) => {
-      if (e.pointerId !== undefined) {
-        activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      }
+      if (handlePointerGestureStart(e)) return;
 
-      // A second finger landing while one is already down starts a pinch
-      // gesture instead: cancel any in-progress single-pointer interaction
-      // (selection box, move-drag, or space/middle-button pan) and hand off
-      // to onMouseMove's pinch handling below.
-      if (activePointers.current.size >= 2) {
-        isPanning.current = false;
-        isDragging.current = false;
-        setDragRect(null);
-        if (isMoveDragging.current) {
-          isMoveDragging.current = false;
-          moveDragStartCell.current = null;
-          moveDragBounds.current = null;
-          setMovingSelection(false);
-        }
-        const pts = Array.from(activePointers.current.values()).slice(0, 2);
-        const [p1, p2] = pts;
-        pinchState.current = {
-          startDist: Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1,
-          startZoom: zoomRef.current,
-          startMid: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 },
-          startOffset: { ...offsetRef.current },
-        };
-        return;
-      }
+      // A click that reaches this handler wasn't on a guide line (its body
+      // and end-cap handles stopPropagation on both onPointerDown and
+      // onMouseDown), so it's a click "elsewhere" — deselect it, per spec.
+      if (selectedGuideLineIdRef.current) setSelectedGuideLineId(null);
 
-      if (e.button === 1 || spaceDown.current) {
-        isPanning.current = true;
-        panStart.current = { x: e.clientX, y: e.clientY };
-        panOffset.current = { ...offset };
-        e.preventDefault();
-        return;
-      }
-      if (bgImageEditingRef.current) {
-        isPanning.current = true;
-        panStart.current = { x: e.clientX, y: e.clientY };
-        panOffset.current = { ...offset };
-        e.preventDefault();
-        return;
-      }
-      if (e.button !== 0) return;
       const cell = mouseToCell(e);
       if (cell.r < 0 || cell.r >= gridRowsRef.current || cell.c < 0 || cell.c >= gridColsRef.current) return;
 
@@ -951,6 +1033,10 @@ export default function useGridState() {
     setCellAspect({ w: 1, h: 1 });
     setBgImage(null);
     setBgImageEditing(false);
+    setGuideLines([]);
+    setSelectedGuideLineId(null);
+    setGuideLineDraft(null);
+    setGuideLineMode(false);
     setShowConfirm(false);
   };
 
@@ -975,6 +1061,24 @@ export default function useGridState() {
         setBgImage(null);
       }
       setBgImageEditing(false);
+      if (Array.isArray(data.guideLines)) {
+        setGuideLines(
+          data.guideLines
+            .filter((g) => g && (g.orientation === "h" || g.orientation === "v"))
+            .map((g) => ({
+              id: typeof g.id === "string" ? g.id : genGuideLineId(),
+              orientation: g.orientation,
+              linePos: g.linePos,
+              start: g.start,
+              end: g.end,
+            }))
+        );
+      } else {
+        setGuideLines([]);
+      }
+      setSelectedGuideLineId(null);
+      setGuideLineDraft(null);
+      setGuideLineMode(false);
       setSymbols((prev) => {
         const existingIds = new Set(prev.map((s) => s.id));
         const newSyms = data.symbols.filter((s) => !existingIds.has(s.id));
@@ -1021,6 +1125,9 @@ export default function useGridState() {
   const bgImageRefForSave = useRef(bgImage);
   bgImageRefForSave.current = bgImage;
 
+  const guideLinesRefForSave = useRef(guideLines);
+  guideLinesRefForSave.current = guideLines;
+
   // memoText is owned by App.jsx; saveGridmark receives it via this ref,
   // which App.jsx keeps up-to-date by calling setMemoTextRef.
   const memoTextRef = useRef("");
@@ -1045,6 +1152,7 @@ export default function useGridState() {
       memoText: memoTextRef.current || "",
       symbols: usedSymbols,
       cells: cellsArr,
+      guideLines: guideLinesRefForSave.current.map((g) => ({ ...g })),
     }, null, 2);
   }, []);
 
@@ -2371,11 +2479,11 @@ export default function useGridState() {
     };
     const onUp = () => {
       bgDragState.current = null;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
     };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   }, []);
 
   const bgImageFix = useCallback(() => {
@@ -2495,6 +2603,389 @@ export default function useGridState() {
   }, [cells, gridRows, gridCols]);
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // GUIDE LINES
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Creation: click to start a guide line, click again to finish it — not a
+  // press-and-hold drag. The first click fixes an anchor grid intersection
+  // (row, col); the orientation isn't decided yet. As the cursor moves, we
+  // compare how far it's moved horizontally vs. vertically from that fixed
+  // anchor — farther horizontally means the line is (or becomes)
+  // horizontal, farther vertically means vertical — exactly the same
+  // "|dx| >= |dy|" test startGuideLineCapDrag uses to flip an existing
+  // line's orientation, so drawing behaves consistently with editing: the
+  // user can freely switch between a horizontal and vertical guide line
+  // right up until the second click commits it. A pointermove listener
+  // (independent of button state, since the button isn't held down between
+  // the two clicks) drives this live preview; the *next* click — wherever
+  // it lands — commits the line using that click's own position, rather
+  // than starting a new one.
+  //
+  // Touch (and pen) input uses a different gesture: press-drag-release.
+  // Pressing fixes the anchor, dragging live-previews the dotted line with
+  // the same |dx| >= |dy| orientation test, and lifting the finger commits
+  // it (a release under 1 grid unit from the anchor creates nothing). A
+  // second finger landing mid-drag cancels creation and hands off to
+  // pinch/pan via handlePointerGestureStart. Pressing on an existing guide
+  // line never reaches this function — the line's own onPointerDown moves
+  // it instead (see startGuideLineMove).
+  const guideLineCreatePendingRef = useRef(null); // null | { anchorRow, anchorCol, onMove, onUp?, onCancel? }
+  // True while an existing guide line's body or end cap is being dragged, so
+  // a second finger landing elsewhere doesn't start a new line mid-drag.
+  const guideLineDragActiveRef = useRef(false);
+
+  // Removes whichever window listeners the pending creation registered.
+  const removeGuideLineCreateListeners = (pending) => {
+    window.removeEventListener("pointermove", pending.onMove);
+    if (pending.onUp) window.removeEventListener("pointerup", pending.onUp);
+    if (pending.onCancel) window.removeEventListener("pointercancel", pending.onCancel);
+  };
+
+  const startGuideLineCreate = useCallback((e) => {
+    if (e.button !== 0) return;
+    if (guideLineDragActiveRef.current) return;
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    e.preventDefault();
+
+    let pending = guideLineCreatePendingRef.current;
+    const isDragGesture = e.pointerType === "touch" || e.pointerType === "pen";
+    // A touch landing while a mouse two-click creation is waiting (or vice
+    // versa) starts over rather than mixing the two gestures.
+    if (pending && (isDragGesture || pending.onUp)) {
+      removeGuideLineCreateListeners(pending);
+      guideLineCreatePendingRef.current = null;
+      pending = null;
+    }
+
+    // Shared by both the live-preview pointermove and the commit step: given
+    // the fixed anchor and a client-space point, decide orientation via
+    // the wedge/angle test and compute the resulting linePos/start/end.
+    const resolve = (clientX, clientY, anchorRow, anchorCol) => {
+      const anchorPxX = rect.left + offsetRef.current.x + anchorCol * csWRef.current;
+      const anchorPxY = rect.top + offsetRef.current.y + anchorRow * csHRef.current;
+      const dx = clientX - anchorPxX;
+      const dy = clientY - anchorPxY;
+      const orientation = Math.abs(dx) >= Math.abs(dy) ? "h" : "v";
+
+      const fc = (clientX - rect.left - offsetRef.current.x) / csWRef.current;
+      const fr = (clientY - rect.top - offsetRef.current.y) / csHRef.current;
+
+      let linePos, fixedPerp, maxPerp, draggedRaw;
+      if (orientation === "h") {
+        linePos = anchorRow; maxPerp = gridColsRef.current; fixedPerp = clampInt(anchorCol, 0, maxPerp); draggedRaw = clampInt(fc, 0, maxPerp);
+      } else {
+        linePos = anchorCol; maxPerp = gridRowsRef.current; fixedPerp = clampInt(anchorRow, 0, maxPerp); draggedRaw = clampInt(fr, 0, maxPerp);
+      }
+      return { orientation, linePos, start: Math.min(fixedPerp, draggedRaw), end: Math.max(fixedPerp, draggedRaw) };
+    };
+
+    const commit = (clientX, clientY, anchorRow, anchorCol) => {
+      const final = resolve(clientX, clientY, anchorRow, anchorCol);
+      setGuideLineDraft(null);
+      if (final.end - final.start >= 1) {
+        const id = genGuideLineId();
+        pushHistory(cellsRef.current);
+        setGuideLines((prev) => [...prev, { id, ...final }]);
+        setSelectedGuideLineId(id);
+      }
+    };
+
+    if (!pending) {
+      // First click / touch press: just fix the anchor intersection.
+      const fc = (e.clientX - rect.left - offsetRef.current.x) / csWRef.current;
+      const fr = (e.clientY - rect.top - offsetRef.current.y) / csHRef.current;
+      const anchorRow = clampInt(fr, 0, gridRowsRef.current);
+      const anchorCol = clampInt(fc, 0, gridColsRef.current);
+
+      setSelectedGuideLineId(null);
+      setGuideLineDraft({ id: null, orientation: "h", linePos: anchorRow, start: anchorCol, end: anchorCol });
+
+      if (isDragGesture) {
+        // Touch/pen: press-drag-release. Only this finger's events count.
+        const pointerId = e.pointerId;
+        const onMove = (me) => {
+          if (me.pointerId !== pointerId) return;
+          setGuideLineDraft({ id: null, ...resolve(me.clientX, me.clientY, anchorRow, anchorCol) });
+        };
+        const onUp = (ue) => {
+          if (ue.pointerId !== pointerId) return;
+          removeGuideLineCreateListeners({ onMove, onUp, onCancel });
+          guideLineCreatePendingRef.current = null;
+          commit(ue.clientX, ue.clientY, anchorRow, anchorCol);
+        };
+        const onCancel = (ce) => {
+          if (ce.pointerId !== pointerId) return;
+          removeGuideLineCreateListeners({ onMove, onUp, onCancel });
+          guideLineCreatePendingRef.current = null;
+          // The container never sees a pointerup for a cancelled pointer,
+          // so drop it from the pinch tracker here.
+          activePointers.current.delete(pointerId);
+          setGuideLineDraft(null);
+        };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onCancel);
+        guideLineCreatePendingRef.current = { anchorRow, anchorCol, onMove, onUp, onCancel };
+        return;
+      }
+
+      // Mouse: two-click flow. Nothing is held down between clicks, so the
+      // move listener runs regardless of button state.
+      const onMove = (me) => {
+        if (me.pointerType && me.pointerType !== "mouse") return;
+        setGuideLineDraft({ id: null, ...resolve(me.clientX, me.clientY, anchorRow, anchorCol) });
+      };
+      window.addEventListener("pointermove", onMove);
+      guideLineCreatePendingRef.current = { anchorRow, anchorCol, onMove };
+      return;
+    }
+
+    // Second click — commit using THIS click's own position (and its own
+    // orientation test), not just whatever the last pointermove reported.
+    removeGuideLineCreateListeners(pending);
+    guideLineCreatePendingRef.current = null;
+    commit(e.clientX, e.clientY, pending.anchorRow, pending.anchorCol);
+  }, [pushHistory]);
+
+  // Cancels an in-progress (first-click-made, second-click-pending) guide
+  // line, e.g. when the user backs out of guide-line mode or presses Escape
+  // instead of clicking a second time.
+  const cancelGuideLineCreate = useCallback(() => {
+    const pending = guideLineCreatePendingRef.current;
+    if (pending) {
+      removeGuideLineCreateListeners(pending);
+      guideLineCreatePendingRef.current = null;
+    }
+    setGuideLineDraft(null);
+  }, []);
+
+  // Leaving guide-line mode mid-creation shouldn't leave a dangling
+  // pointermove listener or a stuck preview line.
+  // Guide lines can only be selected/moved/resized in guide-line mode, so
+  // leaving it (via the toolbar's Select/Fill buttons, knitting mode, etc.)
+  // also drops any guide-line selection — otherwise Delete/Ctrl+C would
+  // still act on a line the user can no longer see as selected.
+  useEffect(() => {
+    if (!guideLineMode) {
+      cancelGuideLineCreate();
+      setSelectedGuideLineId(null);
+    }
+  }, [guideLineMode, cancelGuideLineCreate]);
+
+  const selectGuideLine = useCallback((id) => {
+    setSelectedGuideLineId(id);
+  }, []);
+
+  const deselectGuideLine = useCallback(() => {
+    setSelectedGuideLineId(null);
+  }, []);
+
+  // Moving: drag the line body freely in 2D — both which grid line it sits
+  // on (its perpendicular axis) and where along that line it sits (its
+  // parallel axis, sliding the whole segment while keeping its length
+  // fixed). Both axes snap live to the nearest grid line, each clamped to
+  // the grid's own bounds. Uses the same "live preview via guideLineDraft,
+  // commit once on mouse-up" pattern as cell-selection move-drag (see
+  // commitMove above), so a whole drag gesture is a single undo step.
+  const startGuideLineMove = useCallback((e, id) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const gl = guideLinesRef.current.find((g) => g.id === id);
+    if (!gl) return;
+    setSelectedGuideLineId(id);
+
+    const startMx = e.clientX, startMy = e.clientY;
+    const { orientation, start: startStart, end: startEnd, linePos: startLinePos } = gl;
+    const length = startEnd - startStart;
+    // linePos (which grid line): a row index for a horizontal line, a
+    // column index for a vertical one.
+    const maxLinePos = orientation === "h" ? gridRowsRef.current : gridColsRef.current;
+    // start/end (where along that line): a column range for a horizontal
+    // line, a row range for a vertical one.
+    const maxAlong = orientation === "h" ? gridColsRef.current : gridRowsRef.current;
+
+    const pointerId = e.pointerId;
+    guideLineDragActiveRef.current = true;
+    const onMove = (me) => {
+      if (pointerId !== undefined && me.pointerId !== pointerId) return;
+      const dx = me.clientX - startMx;
+      const dy = me.clientY - startMy;
+      const perpDelta = orientation === "h" ? dy / csHRef.current : dx / csWRef.current;
+      const alongDelta = orientation === "h" ? dx / csWRef.current : dy / csHRef.current;
+      const liveLinePos = clampInt(startLinePos + perpDelta, 0, maxLinePos);
+      // Slide the whole segment together (clamping the shift, not each
+      // endpoint independently) so the line's length never changes.
+      const liveStart = clampInt(startStart + alongDelta, 0, maxAlong - length);
+      const liveEnd = liveStart + length;
+      setGuideLineDraft({ id, orientation, linePos: liveLinePos, start: liveStart, end: liveEnd });
+    };
+    const onUp = (ue) => {
+      if (pointerId !== undefined && ue.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      guideLineDragActiveRef.current = false;
+      setGuideLineDraft((draft) => {
+        if (draft && draft.id === id && (draft.linePos !== startLinePos || draft.start !== startStart || draft.end !== startEnd)) {
+          pushHistory(cellsRef.current);
+          setGuideLines((prev) => prev.map((g) => (g.id === id ? { ...g, linePos: draft.linePos, start: draft.start, end: draft.end } : g)));
+        }
+        return null;
+      });
+    };
+    // Touch gesture interrupted by the browser/OS: drop the preview, no commit.
+    const onCancel = (ce) => {
+      if (pointerId !== undefined && ce.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      guideLineDragActiveRef.current = false;
+      setGuideLineDraft(null);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+  }, [pushHistory]);
+
+  // Length change + orientation flip: dragging one end cap. The OTHER cap
+  // (whichCap's opposite) stays pinned at its current grid intersection —
+  // that fixed (row, col) point never moves for the whole gesture, even
+  // across an orientation flip. Every frame, we compare how far the cursor
+  // has moved horizontally vs. vertically from that fixed point: farther
+  // horizontally means the line is (or becomes) horizontal, farther
+  // vertically means vertical. This is exactly equivalent to the "within
+  // 45° of 0°/180° => horizontal, within 45° of 90°/270° => vertical"
+  // unit-circle wedge test, just without the trig: the 45° boundaries are
+  // precisely where |dx| == |dy|.
+  const startGuideLineCapDrag = useCallback((e, id, whichCap) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const gl = guideLinesRef.current.find((g) => g.id === id);
+    if (!gl) return;
+    setSelectedGuideLineId(id);
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    // The fixed cap's own grid-space (row, col) — the other end from the
+    // one being dragged.
+    const fixedVal = whichCap === "start" ? gl.end : gl.start;
+    let fixedRow, fixedCol;
+    if (gl.orientation === "h") { fixedRow = gl.linePos; fixedCol = fixedVal; }
+    else { fixedCol = gl.linePos; fixedRow = fixedVal; }
+
+    const pointerId = e.pointerId;
+    guideLineDragActiveRef.current = true;
+    const onMove = (me) => {
+      if (pointerId !== undefined && me.pointerId !== pointerId) return;
+      const fixedPxX = rect.left + offsetRef.current.x + fixedCol * csWRef.current;
+      const fixedPxY = rect.top + offsetRef.current.y + fixedRow * csHRef.current;
+      const dx = me.clientX - fixedPxX;
+      const dy = me.clientY - fixedPxY;
+      const orientation = Math.abs(dx) >= Math.abs(dy) ? "h" : "v";
+
+      const fc = (me.clientX - rect.left - offsetRef.current.x) / csWRef.current;
+      const fr = (me.clientY - rect.top - offsetRef.current.y) / csHRef.current;
+
+      let linePos, fixedPerp, maxPerp, draggedRaw;
+      if (orientation === "h") {
+        linePos = clampInt(fixedRow, 0, gridRowsRef.current);
+        maxPerp = gridColsRef.current;
+        fixedPerp = clampInt(fixedCol, 0, maxPerp);
+        draggedRaw = clampInt(fc, 0, maxPerp);
+      } else {
+        linePos = clampInt(fixedCol, 0, gridColsRef.current);
+        maxPerp = gridRowsRef.current;
+        fixedPerp = clampInt(fixedRow, 0, maxPerp);
+        draggedRaw = clampInt(fr, 0, maxPerp);
+      }
+
+      let start = Math.min(fixedPerp, draggedRaw);
+      let end = Math.max(fixedPerp, draggedRaw);
+      // Minimum length: 1 grid unit away from the fixed cap.
+      if (end - start < 1) {
+        if (end < maxPerp) end = start + 1;
+        else start = end - 1;
+      }
+      start = Math.max(0, start);
+      end = Math.min(maxPerp, end);
+
+      setGuideLineDraft({ id, orientation, linePos, start, end });
+    };
+    const onUp = (ue) => {
+      if (pointerId !== undefined && ue.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      guideLineDragActiveRef.current = false;
+      setGuideLineDraft((draft) => {
+        if (draft && draft.id === id) {
+          const changed = draft.orientation !== gl.orientation || draft.linePos !== gl.linePos || draft.start !== gl.start || draft.end !== gl.end;
+          if (changed) {
+            pushHistory(cellsRef.current);
+            setGuideLines((prev) => prev.map((g) => (g.id === id ? { ...g, orientation: draft.orientation, linePos: draft.linePos, start: draft.start, end: draft.end } : g)));
+          }
+        }
+        return null;
+      });
+    };
+    const onCancel = (ce) => {
+      if (pointerId !== undefined && ce.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      guideLineDragActiveRef.current = false;
+      setGuideLineDraft(null);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+  }, [pushHistory]);
+
+  // Copy/Cut/Paste — the guide-line-specific fourth clipboard slot.
+  const copyGuideLine = useCallback(() => {
+    const id = selectedGuideLineIdRef.current;
+    if (!id) return;
+    const gl = guideLinesRef.current.find((g) => g.id === id);
+    if (!gl) return;
+    setGuideLineClipboard({ orientation: gl.orientation, linePos: gl.linePos, start: gl.start, end: gl.end });
+    lastClipboardKindRef.current = "guideline";
+  }, []);
+
+  const cutGuideLine = useCallback(() => {
+    const id = selectedGuideLineIdRef.current;
+    if (!id) return;
+    const gl = guideLinesRef.current.find((g) => g.id === id);
+    if (!gl) return;
+    setGuideLineClipboard({ orientation: gl.orientation, linePos: gl.linePos, start: gl.start, end: gl.end });
+    lastClipboardKindRef.current = "guideline";
+    pushHistory(cellsRef.current);
+    setGuideLines((prev) => prev.filter((g) => g.id !== id));
+    setSelectedGuideLineId(null);
+  }, [pushHistory]);
+
+  // Delete/Backspace on a selected guide line behaves the same as Cut, per
+  // the app's own convention that a plain delete doesn't populate the
+  // clipboard for cells but guide lines are explicitly specified to work
+  // this way (Cut/Delete/Backspace are the same action here).
+  const deleteSelectedGuideLine = cutGuideLine;
+
+  const pasteGuideLine = useCallback(() => {
+    const clip = guideLineClipboard;
+    if (!clip) return;
+    const id = genGuideLineId();
+    pushHistory(cellsRef.current);
+    setGuideLines((prev) => [...prev, { id, ...clip }]);
+    // Guide lines are only movable in guide-line mode, so pasting one
+    // switches into it (clearing any cell selection, same as the toolbar
+    // button) — the pasted line lands stacked on the original and needs
+    // to be draggable right away.
+    setGuideLineMode(true);
+    setSelected(new Set());
+    setSelectedGuideLineId(id);
+  }, [guideLineClipboard, pushHistory]);
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // KEYBOARD SHORTCUTS
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -2528,7 +3019,10 @@ export default function useGridState() {
   }, []);
 
   const actionsRef = useRef({});
-  actionsRef.current = { undo, redo, clearSelected, copySelected, paste, saveGridmark, moveArrow };
+  actionsRef.current = {
+    undo, redo, clearSelected, copySelected, paste, saveGridmark, moveArrow,
+    copyGuideLine, cutGuideLine, pasteGuideLine, cancelGuideLineCreate,
+  };
 
   useEffect(() => {
     const handler = (e) => {
@@ -2538,8 +3032,12 @@ export default function useGridState() {
 
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
+      const hasSelectedGuideLine = !!selectedGuideLineIdRef.current;
 
-      if (ctrl && key === "s") {
+      if (key === "escape" && guideLineCreatePendingRef.current) {
+        e.preventDefault();
+        actionsRef.current.cancelGuideLineCreate();
+      } else if (ctrl && key === "s") {
         e.preventDefault();
         actionsRef.current.saveGridmark();
       } else if (ctrl && key === "z" && !e.shiftKey) {
@@ -2550,13 +3048,20 @@ export default function useGridState() {
         actionsRef.current.redo();
       } else if (key === "backspace" || key === "delete" || (ctrl && key === "x")) {
         e.preventDefault();
-        actionsRef.current.clearSelected();
+        if (hasSelectedGuideLine) actionsRef.current.cutGuideLine();
+        else actionsRef.current.clearSelected();
       } else if (ctrl && key === "c") {
         e.preventDefault();
-        actionsRef.current.copySelected();
+        if (hasSelectedGuideLine) {
+          actionsRef.current.copyGuideLine();
+        } else {
+          lastClipboardKindRef.current = "cell";
+          actionsRef.current.copySelected();
+        }
       } else if (ctrl && key === "v") {
         e.preventDefault();
-        actionsRef.current.paste();
+        if (lastClipboardKindRef.current === "guideline") actionsRef.current.pasteGuideLine();
+        else actionsRef.current.paste();
       } else if (ctrl && key === "f") {
         e.preventDefault();
         actionsRef.current.openFind();
@@ -3054,7 +3559,7 @@ export default function useGridState() {
     bgImage, bgImageEditing, bgFileInputRef, handleBgImageUpload,
     bgImageStartDrag, bgImageFix, bgImageEdit, bgImageRemove, setBgImageOpacity,
     applyBgImageToColors,
-    onMouseDown, onMouseMove, onMouseUp, onWheel,
+    onMouseDown, onMouseMove, onMouseUp, onWheel, handlePointerGestureStart,
     dirtyRef,
     fileName, setFileName,
     cellColor, setCellColor,
@@ -3068,5 +3573,9 @@ export default function useGridState() {
     replaceSymbolId, setReplaceSymbol, onReplace, onReplaceAll,
     replaceColor, setReplaceColor, replaceColorEnabled, setReplaceColorEnabled,
     openReplace, replaceRowOpen, setReplaceRowOpen,
+    guideLines, guideLineDraft, guideLineMode, setGuideLineMode, toggleGuideLineMode,
+    selectedGuideLineId, selectGuideLine, deselectGuideLine,
+    startGuideLineCreate, cancelGuideLineCreate, startGuideLineMove, startGuideLineCapDrag,
+    guideLineClipboard, copyGuideLine, cutGuideLine, pasteGuideLine, deleteSelectedGuideLine,
   };
 }

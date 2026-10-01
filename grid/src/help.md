@@ -13,6 +13,11 @@ Number of selected cells in a row must be >= Symbol width
 **right click:** open edit menu
 **color picker:** color selected cells
 
+## GUIDE LINE MODE - PLUS ICON
+Create guide lines on the grid
+Guide lines can only form on grid lines
+move/copy/paste guide lines
+
 ## COLORING MODE - COLOR FILL ICON
 Cells are colored with color in Color Picker
 Click Color picker to change color
@@ -22,7 +27,7 @@ Outlined color box is active
 **Import:** Import JSON file that was saved before
 **Save:** Save as JSON to be re-imported back to grid
 **Save as:** Save grid as image/vector
-**Save Legened:** Save legend as image/vector
+**Save Legend:** Save legend as image/vector
 
 ## EDIT
 **Right Click** to open edit menu
@@ -31,6 +36,7 @@ Outlined color box is active
 **Cut (All):** clear selected cells
 **Copy (All):** copy selected cells
 **Paste (All):** paste clipboard to selected cell
+**Group:** save selected cells as a group (on side bar) for reuse
 **Mirror:** mirror selected cells in direction
 **Flip Horizontal:** flip selected cells horizontally
 **Flip Vertically:** flip selected cells vertically
@@ -64,6 +70,7 @@ Click: Slash up till clicked cell
 **Background Image:** insert background image
 **Edit Background Image:** move/stretch/change opacity of background image
 **Remove Background Image:**
+**Trace Background to Colors:** transform background image to colored cells
 **Memo:** Open memo pad to take notes, content is saved when memo is closed
 **Fit to page:** fit grid to page
 
@@ -72,10 +79,17 @@ Number of cells selected
 Rows: {num of rows selected} Cols: {num of cols selected}
 [start row, start col] -> [end row, end col]
 
-## SIDE BAR
+## SIDE BAR (Symbol)
 **DIR:** directory of symbols
 **EDIT:** upload your own symbols, must have svg extension. Width is the number of grid cells the symbol occupies.
 **◀:** collapse/expand side bar
+
+## SIDE BAR (Groups)
+Saved groups of symbols/colors
+
+## SIDE BAR (Files)
+Open folder from file explorer
+Only shows json files
 
 ## KEYBOARD SHORTCUTS
 **ctrl + x:** cut
